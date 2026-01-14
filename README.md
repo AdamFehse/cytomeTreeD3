@@ -1,4 +1,4 @@
-# CytoTree Explorer
+# CytomeTreeD3
 
 Flow cytometry analysis with automatic gating using the CytomeTree algorithm. Upload FCS files and visualize the binary tree in your browser.
 
