@@ -5,14 +5,6 @@ import TreeViz from './TreeViz'
 import CellScatter from './CellScatter'
 import GatingOverview from './GatingOverview'
 
-const DAD_JOKES = [
-  "Why don't scientists trust atoms? Because they make up everything!",
-  "What do you call a fake noodle? An impasta!",
-  "Why did the scarecrow win an award? He was outstanding in his field!",
-  "What do you call a bear with no teeth? A gummy bear!",
-  "Why don't eggs tell jokes? They'd crack each other up!",
-]
-
 const DEFAULT_WORKER = 'https://cytomaitree.adamfehse.workers.dev/'
 
 interface Phenotype {
@@ -40,6 +32,10 @@ function App() {
   const [treeData, setTreeData] = useState<TreeData | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [joke, setJoke] = useState('')
+  const [aiJokes, setAiJokes] = useState<string[]>([])
+  const [aiFacts, setAiFacts] = useState<string[]>([])
+  const [aiTrivia, setAiTrivia] = useState<string[]>([])
+  const [jokeIndex, setJokeIndex] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [threshold, setThreshold] = useState(0.1)
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
@@ -47,7 +43,10 @@ function App() {
   const [scatterYMarker, setScatterYMarker] = useState<string>('')
   const [selectedPhenotype, setSelectedPhenotype] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
+  const [elapsedTime, setElapsedTime] = useState(0)
   const progressTimerRef = useRef<number | null>(null)
+  const jokeTimerRef = useRef<number | null>(null)
+  const elapsedTimerRef = useRef<number | null>(null)
   const [aiModels, setAiModels] = useState<string[]>([])
   const [aiModel, setAiModel] = useState<string>('')
   const [aiInsight, setAiInsight] = useState<Record<string, unknown> | null>(null)
@@ -89,6 +88,24 @@ function App() {
     return () => controller.abort()
   }, [])
 
+  const loadModelsOnce = async () => {
+    if (aiModels.length > 0) return aiModels
+    try {
+      const response = await fetch(DEFAULT_WORKER)
+      if (!response.ok) return []
+      const data = await response.json()
+      const models = Array.isArray(data.allowed_models) ? data.allowed_models.filter(Boolean) : []
+      if (models.length > 0) {
+        setAiModels(models)
+        setAiModel((current) => current || models[0])
+      }
+      return models
+    } catch {
+      return []
+    }
+  }
+
+
   useEffect(() => {
     if (!treeData || aiModels.length === 0 || aiLoading || aiInsight || aiError) {
       return
@@ -96,7 +113,7 @@ function App() {
     void runAiInsights(treeData)
   }, [aiModels, treeData, aiLoading, aiInsight, aiError])
 
-  const callWorker = async (prompt: string, model?: string) => {
+  const callWorker = async (prompt: string, model?: string, type?: 'engagement' | 'insights') => {
     const controller = new AbortController()
     const timeoutId = window.setTimeout(() => controller.abort(), 30000)
 
@@ -104,7 +121,7 @@ function App() {
       const response = await fetch(DEFAULT_WORKER, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: prompt, model }),
+        body: JSON.stringify({ text: prompt, model, type }),
         signal: controller.signal
       })
 
@@ -118,6 +135,50 @@ function App() {
       window.clearTimeout(timeoutId)
     }
   }
+
+  const fetchEngagementLines = async () => {
+    const models = await loadModelsOnce()
+    if (models.length === 0) {
+      console.log('No models available for engagement lines')
+      setAiJokes([])
+      setAiFacts([])
+      setAiTrivia([])
+      return
+    }
+    // Use the first (fastest) model from ALLOWED_MODELS
+    const model = models[0]
+    console.log('Fetching engagement lines with model:', model)
+
+    try {
+      const result = await callWorker('', model, 'engagement')
+      console.log('Engagement API response:', result)
+      let payload = result
+      if (typeof result === 'string') {
+        try {
+          payload = JSON.parse(result)
+        } catch {
+          payload = result
+        }
+      }
+      const lines = Array.isArray(payload?.lines)
+        ? payload.lines.filter(Boolean)
+        : Array.isArray(payload)
+          ? payload.filter(Boolean)
+          : []
+      const facts = Array.isArray(payload?.facts) ? payload.facts.filter(Boolean) : []
+      const trivia = Array.isArray(payload?.trivia) ? payload.trivia.filter(Boolean) : []
+      console.log('Parsed engagement content:', { lines, facts, trivia })
+      setAiJokes(lines)
+      setAiFacts(facts)
+      setAiTrivia(trivia)
+    } catch (err) {
+      console.error('Engagement lines error:', err)
+      setAiJokes([])
+      setAiFacts([])
+      setAiTrivia([])
+    }
+  }
+
 
   const buildAiPayload = (data: TreeData) => {
     const treeNodes = data.treeNodes && data.treeNodes.length > 0 ? data.treeNodes : data.nodes
@@ -170,7 +231,7 @@ function App() {
         JSON.stringify(payload)
       ].join('\n')
 
-      const result = await callWorker(prompt, aiModel)
+      const result = await callWorker(prompt, aiModel, 'insights')
       setAiInsight(result)
     } catch (err) {
       setAiError(err instanceof Error ? err.message : 'AI request failed')
@@ -203,7 +264,12 @@ function App() {
     setProgress(0)
     setAiError(null)
     setAiInsight(null)
-    setJoke(DAD_JOKES[Math.floor(Math.random() * DAD_JOKES.length)])
+    setAiJokes([])
+    setAiFacts([])
+    setAiTrivia([])
+    setJoke('Warming up fun facts...')
+    setJokeIndex(0)
+    void fetchEngagementLines()
 
     try {
       // Convert files to base64
@@ -280,9 +346,59 @@ function App() {
         window.clearInterval(progressTimerRef.current)
         progressTimerRef.current = null
       }
+      if (jokeTimerRef.current) {
+        window.clearInterval(jokeTimerRef.current)
+        jokeTimerRef.current = null
+      }
       setAnalyzing(false)
     }
   }
+
+  useEffect(() => {
+    if (!analyzing || (aiJokes.length === 0 && aiFacts.length === 0 && aiTrivia.length === 0)) return
+    // Combine all content into one cycling pool
+    const allContent = [...aiJokes, ...aiFacts, ...aiTrivia]
+    setJoke(allContent[0])
+    setJokeIndex(0)
+    if (jokeTimerRef.current) {
+      window.clearInterval(jokeTimerRef.current)
+    }
+    jokeTimerRef.current = window.setInterval(() => {
+      setJokeIndex((prev) => {
+        const next = (prev + 1) % allContent.length
+        setJoke(allContent[next])
+        return next
+      })
+    }, 3600)
+
+    return () => {
+      if (jokeTimerRef.current) {
+        window.clearInterval(jokeTimerRef.current)
+        jokeTimerRef.current = null
+      }
+    }
+  }, [analyzing, aiJokes, aiFacts, aiTrivia])
+
+  useEffect(() => {
+    if (!analyzing) {
+      setElapsedTime(0)
+      if (elapsedTimerRef.current) {
+        window.clearInterval(elapsedTimerRef.current)
+        elapsedTimerRef.current = null
+      }
+      return
+    }
+    elapsedTimerRef.current = window.setInterval(() => {
+      setElapsedTime((prev) => prev + 1)
+    }, 1000)
+
+    return () => {
+      if (elapsedTimerRef.current) {
+        window.clearInterval(elapsedTimerRef.current)
+        elapsedTimerRef.current = null
+      }
+    }
+  }, [analyzing])
 
   return (
     <div className="app">
@@ -357,7 +473,7 @@ function App() {
                 <div className="progress-bar">
                   <div className="progress-fill" />
                 </div>
-                <span className="progress-label">{progress}%</span>
+                <span className="progress-label">{progress}% • {Math.floor(elapsedTime / 60)}:{String(elapsedTime % 60).padStart(2, '0')}</span>
               </div>
             )}
             {error && <p className="error" role="alert">Error: {error}</p>}
