@@ -10,7 +10,7 @@ services:
 
   - type: static_site
     name: cytotree-frontend
-    buildCommand: cd frontend && npm install && npm run build
+    buildCommand: cd frontend && npm install && VITE_API_URL=https://cytotree-backend.onrender.com npm run build
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
