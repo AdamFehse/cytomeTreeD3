@@ -40,6 +40,7 @@ ehthumbs.db
 *~
 .sublime-project
 .sublime-workspace
+random.txt
 
 # Build/Temp files
 dist/

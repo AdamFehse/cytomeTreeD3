@@ -100,6 +100,52 @@ function(req, res) {
 
     tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
 
+    # Build gating tree (binary) for visualization
+    tree_nodes <- list()
+    tree_links <- list()
+    tree_node_id <- 0
+
+    build_node_with_ids <- function(idx) {
+      tree_node_id <<- tree_node_id + 1
+      current_id <- tree_node_id
+
+      row <- which(tree$mark_tree[, 1] == idx)
+      if (length(row) == 0) {
+        # Leaf node
+        cells_in_pop <- sum(tree$labels == idx)
+        tree_nodes[[current_id]] <<- list(
+          id = current_id,
+          name = paste0("Pop_", idx),
+          marker = paste0("Pop_", idx),
+          cells = cells_in_pop
+        )
+        return(current_id)
+      }
+
+      # Internal node
+      r <- tree$mark_tree[row[1], ]
+      marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
+
+      tree_nodes[[current_id]] <<- list(
+        id = current_id,
+        name = paste0("Node_", idx),
+        marker = marker_name,
+        threshold = round(r[3], 2)
+      )
+
+      # Recursively build children
+      left_id <- build_node_with_ids(r[4])
+      right_id <- build_node_with_ids(r[5])
+
+      # Create links to children
+      tree_links[[length(tree_links) + 1]] <<- list(source = current_id, target = left_id)
+      tree_links[[length(tree_links) + 1]] <<- list(source = current_id, target = right_id)
+
+      return(current_id)
+    }
+
+    build_node_with_ids(1)
+
     # Get annotation with marker combinations
     annot <- Annotation(tree, plot = FALSE)
     annot_combinations <- annot$combinations
@@ -158,8 +204,26 @@ function(req, res) {
       )
     })
 
+    # Convert gating tree nodes/links to proper format
+    tree_nodes_clean <- lapply(tree_nodes, function(node) {
+      list(
+        id = as.integer(node$id),
+        name = as.character(node$name),
+        marker = as.character(node$marker),
+        cells = if (!is.null(node$cells)) as.integer(node$cells) else NULL,
+        threshold = node$threshold
+      )
+    })
+
     # Convert links to proper format
     links_clean <- lapply(links, function(link) {
+      list(
+        source = as.integer(link$source),
+        target = as.integer(link$target)
+      )
+    })
+
+    tree_links_clean <- lapply(tree_links, function(link) {
       list(
         source = as.integer(link$source),
         target = as.integer(link$target)
@@ -227,6 +291,8 @@ function(req, res) {
     result <- list(
       nodes = nodes_clean,
       links = links_clean,
+      treeNodes = tree_nodes_clean,
+      treeLinks = tree_links_clean,
       populations = length(unique(tree$labels)),
       cells = nrow(data),
       markers = as.list(markers),

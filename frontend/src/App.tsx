@@ -24,6 +24,8 @@ interface Phenotype {
 interface TreeData {
   nodes: Array<{ id: number; name: string; marker: string; cells: number }>
   links: Array<{ source: number; target: number }>
+  treeNodes?: Array<{ id: number; name: string; marker: string; cells?: number; threshold?: number }>
+  treeLinks?: Array<{ source: number; target: number }>
   populations: number
   cells: number
   markers?: string[]
@@ -352,7 +354,12 @@ function App() {
 
               <section className="card" role="region" aria-labelledby="population-tree-heading">
                 <h2 id="population-tree-heading">Population Tree</h2>
-                <TreeViz data={treeData} />
+                <TreeViz
+                  data={{
+                    nodes: treeData.treeNodes && treeData.treeNodes.length > 0 ? treeData.treeNodes : treeData.nodes,
+                    links: treeData.treeLinks && treeData.treeLinks.length > 0 ? treeData.treeLinks : treeData.links
+                  }}
+                />
               </section>
             </>
           )}
