@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import './App.css'
 import TreeViz from './TreeViz'
@@ -12,6 +12,8 @@ const DAD_JOKES = [
   "What do you call a bear with no teeth? A gummy bear!",
   "Why don't eggs tell jokes? They'd crack each other up!",
 ]
+
+const DEFAULT_WORKER = 'https://cytomaitree.adamfehse.workers.dev/'
 
 interface Phenotype {
   key: string
@@ -46,6 +48,11 @@ function App() {
   const [selectedPhenotype, setSelectedPhenotype] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
   const progressTimerRef = useRef<number | null>(null)
+  const [aiModels, setAiModels] = useState<string[]>([])
+  const [aiModel, setAiModel] = useState<string>('')
+  const [aiInsight, setAiInsight] = useState<Record<string, unknown> | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
 
   // Skip link functionality
   const skipToMainContent = () => {
@@ -62,6 +69,129 @@ function App() {
     setSelectedFiles(e.target.files)
   }
 
+  useEffect(() => {
+    const controller = new AbortController()
+    const loadModels = async () => {
+      try {
+        const response = await fetch(DEFAULT_WORKER, { signal: controller.signal })
+        if (!response.ok) return
+        const data = await response.json()
+        const models = Array.isArray(data.allowed_models) ? data.allowed_models.filter(Boolean) : []
+        setAiModels(models)
+        if (models.length > 0) {
+          setAiModel((current) => current || models[0])
+        }
+      } catch {
+        // Ignore model load failures; AI can still be enabled later.
+      }
+    }
+    loadModels()
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    if (!treeData || aiModels.length === 0 || aiLoading || aiInsight || aiError) {
+      return
+    }
+    void runAiInsights(treeData)
+  }, [aiModels, treeData, aiLoading, aiInsight, aiError])
+
+  const callWorker = async (prompt: string, model?: string) => {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 30000)
+
+    try {
+      const response = await fetch(DEFAULT_WORKER, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: prompt, model }),
+        signal: controller.signal
+      })
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        throw new Error(`AI request failed (${response.status}). ${body}`)
+      }
+
+      return response.json()
+    } finally {
+      window.clearTimeout(timeoutId)
+    }
+  }
+
+  const buildAiPayload = (data: TreeData) => {
+    const treeNodes = data.treeNodes && data.treeNodes.length > 0 ? data.treeNodes : data.nodes
+    const treeLinks = data.treeLinks && data.treeLinks.length > 0 ? data.treeLinks : data.links
+    return {
+      summary: {
+        total_cells: data.cells,
+        populations: data.populations,
+        markers: data.markers || [],
+        scatter_markers: data.cellDataMarkers || null
+      },
+      tree: {
+        nodes: treeNodes.slice(0, 200),
+        links: treeLinks.slice(0, 400)
+      },
+      phenotypes: data.phenotypes ? data.phenotypes.slice(0, 120) : [],
+      notes: {
+        cell_data_included: false,
+        omitted: ['cellData'],
+        node_limit: 200,
+        link_limit: 400,
+        phenotype_limit: 120
+      }
+    }
+  }
+
+  const runAiInsights = async (data: TreeData) => {
+    if (aiModels.length === 0 || !aiModel) {
+      return
+    }
+    setAiLoading(true)
+    setAiError(null)
+    setAiInsight(null)
+    try {
+      const payload = buildAiPayload(data)
+      const prompt = [
+        'You are an expert cytometry analyst.',
+        'Analyze the JSON dataset and return concise insights for a dashboard viewer.',
+        'Return ONLY valid JSON with these keys:',
+        '{',
+        '  "summary": "2-4 sentences explaining the overall result",',
+        '  "key_findings": ["bullet", "bullet"],',
+        '  "notable_populations": ["name or label with reason"],',
+        '  "anomalies": ["potential issues or flags"],',
+        '  "suggested_next_steps": ["action", "action"],',
+        '  "visualization_tips": ["tip", "tip"]',
+        '}',
+        '',
+        'DATA:',
+        JSON.stringify(payload)
+      ].join('\n')
+
+      const result = await callWorker(prompt, aiModel)
+      setAiInsight(result)
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'AI request failed')
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const renderAiList = (value: unknown) => {
+    if (!Array.isArray(value) || value.length === 0) {
+      return <p className="muted">Not observed.</p>
+    }
+    return (
+      <ul className="ai-list">
+        {value.map((item, index) => (
+          <li key={`${index}-${String(item)}`}>{String(item)}</li>
+        ))}
+      </ul>
+    )
+  }
+
   const handleAnalyze = async () => {
     if (!selectedFiles || selectedFiles.length === 0) {
       setError('Please select at least one FCS file')
@@ -71,6 +201,8 @@ function App() {
     setAnalyzing(true)
     setError(null)
     setProgress(0)
+    setAiError(null)
+    setAiInsight(null)
     setJoke(DAD_JOKES[Math.floor(Math.random() * DAD_JOKES.length)])
 
     try {
@@ -139,6 +271,7 @@ function App() {
       }
 
       setTreeData(data)
+      void runAiInsights(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
       console.error('Analysis error:', err)
@@ -284,6 +417,75 @@ function App() {
                       <span className="chip muted" aria-label={`Plus ${treeData.markers.length - 8} more markers`}>+{treeData.markers.length - 8} more</span>
                     )}
                   </div>
+                )}
+              </section>
+
+              <section className="card ai-card" role="region" aria-labelledby="ai-insights-heading">
+                <div className="card-header">
+                  <h2 id="ai-insights-heading">AI Insights</h2>
+                  <div className="ai-toolbar">
+                    <select
+                      className="ai-select"
+                      value={aiModel}
+                      onChange={(event) => setAiModel(event.target.value)}
+                      disabled={aiModels.length === 0 || aiLoading}
+                    >
+                      {aiModels.length === 0 && <option value="">No models</option>}
+                      {aiModels.map((model) => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="ai-button"
+                      onClick={() => treeData && runAiInsights(treeData)}
+                      disabled={!treeData || aiModels.length === 0 || aiLoading}
+                    >
+                      {aiLoading ? 'Generating…' : 'Regenerate'}
+                    </button>
+                  </div>
+                </div>
+                {aiModels.length === 0 && (
+                  <p className="muted">
+                    Add `ALLOWED_MODELS` to the Cloudflare Worker to enable AI insights.
+                  </p>
+                )}
+                {aiLoading && (
+                  <div className="ai-loading">
+                    <span className="ai-pulse" />
+                    Generating insights<span className="ai-dots">...</span>
+                  </div>
+                )}
+                {aiError && <p className="error">{aiError}</p>}
+                {aiInsight && (
+                  <div className="ai-grid">
+                    <section className="ai-section">
+                      <h3>Summary</h3>
+                      <p>{String(aiInsight.summary || 'Not observed.')}</p>
+                    </section>
+                    <section className="ai-section">
+                      <h3>Key Findings</h3>
+                      {renderAiList(aiInsight.key_findings)}
+                    </section>
+                    <section className="ai-section">
+                      <h3>Notable Populations</h3>
+                      {renderAiList(aiInsight.notable_populations)}
+                    </section>
+                    <section className="ai-section">
+                      <h3>Anomalies</h3>
+                      {renderAiList(aiInsight.anomalies)}
+                    </section>
+                    <section className="ai-section">
+                      <h3>Suggested Next Steps</h3>
+                      {renderAiList(aiInsight.suggested_next_steps)}
+                    </section>
+                    <section className="ai-section">
+                      <h3>Visualization Tips</h3>
+                      {renderAiList(aiInsight.visualization_tips)}
+                    </section>
+                  </div>
+                )}
+                {!aiLoading && !aiError && !aiInsight && aiModels.length > 0 && (
+                  <p className="muted">Insights will appear here after analysis finishes.</p>
                 )}
               </section>
 

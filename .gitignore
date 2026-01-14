@@ -57,3 +57,5 @@ plan.md
 
 # Docker
 .dockerignore
+# Cloudflare Worker local copy
+service.js
