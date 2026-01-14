@@ -53,20 +53,17 @@ jobs:
       url: ${{ steps.deployment.outputs.pages_url }}
     runs-on: ubuntu-latest
     needs: build
+    env:
+      RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Validate Render deploy hook
-        if: ${{ secrets.RENDER_DEPLOY_HOOK == '' }}
-        run: |
-          echo "RENDER_DEPLOY_HOOK secret is not set for this workflow." >&2
-          exit 1
-
       - name: Trigger Render Deploy Hook
-        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
-        env:
-          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK secret is not set for this workflow." >&2
+            exit 1
+          fi
           curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
