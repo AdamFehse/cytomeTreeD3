@@ -4,14 +4,13 @@ services:
     env: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    port: 8000
     envVars:
       - key: RENDER_EXTERNAL_HOSTNAME
         scope: blueprint
 
   - type: static_site
     name: cytotree-frontend
-    buildCommand: npm install && npm run build
+    buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
