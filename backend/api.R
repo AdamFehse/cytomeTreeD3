@@ -100,51 +100,54 @@ function(req, res) {
 
     tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
 
-    # Build gating tree (binary) for visualization
+    # Build gating tree (binary) for visualization, guard against 1D mark_tree
     tree_nodes <- list()
     tree_links <- list()
     tree_node_id <- 0
+    mark_tree <- tree$mark_tree
 
-    build_node_with_ids <- function(idx) {
-      tree_node_id <<- tree_node_id + 1
-      current_id <- tree_node_id
+    if (!is.null(mark_tree) && length(dim(mark_tree)) == 2 && nrow(mark_tree) > 0 && ncol(mark_tree) >= 5) {
+      build_node_with_ids <- function(idx) {
+        tree_node_id <<- tree_node_id + 1
+        current_id <- tree_node_id
 
-      row <- which(tree$mark_tree[, 1] == idx)
-      if (length(row) == 0) {
-        # Leaf node
-        cells_in_pop <- sum(tree$labels == idx)
+        row <- which(mark_tree[, 1] == idx)
+        if (length(row) == 0) {
+          # Leaf node
+          cells_in_pop <- sum(tree$labels == idx)
+          tree_nodes[[current_id]] <<- list(
+            id = current_id,
+            name = paste0("Pop_", idx),
+            marker = paste0("Pop_", idx),
+            cells = cells_in_pop
+          )
+          return(current_id)
+        }
+
+        # Internal node
+        r <- mark_tree[row[1], ]
+        marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
+
         tree_nodes[[current_id]] <<- list(
           id = current_id,
-          name = paste0("Pop_", idx),
-          marker = paste0("Pop_", idx),
-          cells = cells_in_pop
+          name = paste0("Node_", idx),
+          marker = marker_name,
+          threshold = round(r[3], 2)
         )
+
+        # Recursively build children
+        left_id <- build_node_with_ids(r[4])
+        right_id <- build_node_with_ids(r[5])
+
+        # Create links to children
+        tree_links[[length(tree_links) + 1]] <<- list(source = current_id, target = left_id)
+        tree_links[[length(tree_links) + 1]] <<- list(source = current_id, target = right_id)
+
         return(current_id)
       }
 
-      # Internal node
-      r <- tree$mark_tree[row[1], ]
-      marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
-
-      tree_nodes[[current_id]] <<- list(
-        id = current_id,
-        name = paste0("Node_", idx),
-        marker = marker_name,
-        threshold = round(r[3], 2)
-      )
-
-      # Recursively build children
-      left_id <- build_node_with_ids(r[4])
-      right_id <- build_node_with_ids(r[5])
-
-      # Create links to children
-      tree_links[[length(tree_links) + 1]] <<- list(source = current_id, target = left_id)
-      tree_links[[length(tree_links) + 1]] <<- list(source = current_id, target = right_id)
-
-      return(current_id)
+      build_node_with_ids(1)
     }
-
-    build_node_with_ids(1)
 
     # Get annotation with marker combinations
     annot <- Annotation(tree, plot = FALSE)
