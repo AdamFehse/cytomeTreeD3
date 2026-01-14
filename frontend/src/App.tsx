@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
+import './App.css'
 import TreeViz from './TreeViz'
 import CellScatter from './CellScatter'
 import GatingOverview from './GatingOverview'
@@ -40,6 +42,19 @@ function App() {
   const [scatterXMarker, setScatterXMarker] = useState<string>('')
   const [scatterYMarker, setScatterYMarker] = useState<string>('')
   const [selectedPhenotype, setSelectedPhenotype] = useState<string | null>(null)
+  const [progress, setProgress] = useState(0)
+  const progressTimerRef = useRef<number | null>(null)
+
+  // Skip link functionality
+  const skipToMainContent = () => {
+    const mainContent = document.querySelector('main[role="main"]');
+    if (mainContent) {
+      mainContent.setAttribute('tabIndex', '-1');
+      mainContent.addEventListener('blur', () => {
+        mainContent.removeAttribute('tabIndex');
+      }, { once: true });
+    }
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSelectedFiles(e.target.files)
@@ -53,6 +68,7 @@ function App() {
 
     setAnalyzing(true)
     setError(null)
+    setProgress(0)
     setJoke(DAD_JOKES[Math.floor(Math.random() * DAD_JOKES.length)])
 
     try {
@@ -77,10 +93,18 @@ function App() {
           name: file.name,
           content: base64
         })
+        setProgress(Math.round(((i + 1) / selectedFiles.length) * 60))
       }
 
       // Send to batch endpoint
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      setProgress((current) => Math.max(current, 65))
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current)
+      }
+      progressTimerRef.current = window.setInterval(() => {
+        setProgress((current) => (current < 95 ? current + 1 : current))
+      }, 1200)
       const response = await fetch(`${apiUrl}/analyze-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -101,6 +125,8 @@ function App() {
         throw new Error(Array.isArray(data.error) ? data.error[0] : data.error)
       }
 
+      setProgress(100)
+
       // Set initial scatter plot markers
       if (data.cellDataMarkers) {
         setScatterXMarker(data.cellDataMarkers.x)
@@ -115,175 +141,223 @@ function App() {
       setError(err instanceof Error ? err.message : 'Unknown error')
       console.error('Analysis error:', err)
     } finally {
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current)
+        progressTimerRef.current = null
+      }
       setAnalyzing(false)
     }
   }
 
   return (
-    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-      <h1>CytoTree Explorer</h1>
-      <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '5px' }}>
-        <div style={{ marginBottom: '15px' }}>
-          <label style={{ display: 'block', marginBottom: '10px' }}>
-            <strong>Select FCS Files:</strong>
-            <input
-              type="file"
-              multiple
-              accept=".fcs"
-              onChange={handleFileSelect}
-              disabled={analyzing}
-              style={{ marginLeft: '10px', display: 'block', marginTop: '5px' }}
-            />
-          </label>
-          {selectedFiles && selectedFiles.length > 0 && (
-            <p style={{ margin: '10px 0', color: '#666' }}>
-              {selectedFiles.length} file(s) selected
-            </p>
-          )}
-        </div>
-
-        <div style={{ marginBottom: '15px' }}>
-          <label style={{ display: 'block' }}>
-            Threshold (t): {threshold.toFixed(2)}
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={threshold}
-              onChange={(e) => setThreshold(parseFloat(e.target.value))}
-              disabled={analyzing}
-              style={{ marginLeft: '10px', width: '200px' }}
-            />
-          </label>
-        </div>
-
-        <button
-          onClick={handleAnalyze}
-          disabled={analyzing || !selectedFiles || selectedFiles.length === 0}
-          style={{
-            padding: '10px 20px',
-            fontSize: '16px',
-            backgroundColor:
-              analyzing || !selectedFiles || selectedFiles.length === 0
-                ? '#ccc'
-                : '#4CAF50',
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            cursor:
-              analyzing || !selectedFiles || selectedFiles.length === 0
-                ? 'not-allowed'
-                : 'pointer'
-          }}
-        >
-          {analyzing ? 'Analyzing...' : 'Analyze'}
-        </button>
-      </div>
-
-      {analyzing && <p style={{ fontStyle: 'italic', color: '#666' }}>{joke}</p>}
-      {error && <p style={{ color: 'red' }}>Error: {error}</p>}
-      {treeData && (
+    <div className="app">
+      <a href="#main-content" className="skip-link" onClick={skipToMainContent}>Skip to main content</a>
+      <header className="app-header" role="banner">
         <div>
-          <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#e8f5e9', borderRadius: '5px' }}>
-            <h3 style={{ margin: '0 0 10px 0' }}>Analysis Results</h3>
-            <p style={{ margin: '5px 0' }}>
-              <strong>Total Cells:</strong> {treeData.cells} | <strong>Populations:</strong> {treeData.populations}
-            </p>
-            {treeData.markers && treeData.markers.length > 0 && (
-              <p style={{ margin: '5px 0' }}>
-                <strong>Markers Used:</strong> {treeData.markers.join(', ')}
-              </p>
-            )}
-            {treeData.nodes && treeData.nodes.length > 0 && (
-              <div style={{ marginTop: '10px', fontSize: '12px', color: '#555' }}>
-                <p style={{ margin: '5px 0', fontWeight: 'bold' }}>Population Breakdown:</p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px' }}>
-                  {treeData.nodes.map((node) => (
-                    <div key={node.id} style={{ padding: '6px', backgroundColor: '#fff', borderRadius: '3px', border: '1px solid #ccc' }}>
-                      <div style={{ fontWeight: 'bold' }}>{node.name}</div>
-                      <div>{node.cells} cells</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <p className="app-kicker">Cytometry Explorer</p>
+          <h1>CytomeTreeD3</h1>
+          <p className="app-subtitle">Upload FCS files, run CytomeTree, and explore populations in a dashboard view.</p>
+        </div>
+        <div className="status-chip" aria-label="File upload status">
+          <span className="status-dot" />
+          {selectedFiles && selectedFiles.length > 0
+            ? `${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} ready`
+            : 'No files loaded'}
+        </div>
+      </header>
 
-          {treeData.phenotypes && treeData.phenotypes.length > 0 && (
-            <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f0f8ff', borderRadius: '5px' }}>
-              <h3 style={{ margin: '0 0 10px 0' }}>Select Phenotype</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px' }}>
-                <button
-                  onClick={() => setSelectedPhenotype(null)}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: selectedPhenotype === null ? '#4CAF50' : '#e0e0e0',
-                    color: selectedPhenotype === null ? 'white' : 'black',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  All Cells ({treeData.cells})
-                </button>
-                {treeData.phenotypes.map((pheno) => (
-                  <button
-                    key={pheno.key}
-                    onClick={() => setSelectedPhenotype(pheno.key)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: selectedPhenotype === pheno.key ? '#4CAF50' : '#e0e0e0',
-                      color: selectedPhenotype === pheno.key ? 'white' : 'black',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                    }}
-                    title={`${pheno.count} cells (${(pheno.proportion * 100).toFixed(1)}%)`}
-                  >
-                    {pheno.label} ({(pheno.proportion * 100).toFixed(1)}%)
-                  </button>
-                ))}
-              </div>
+      <div className="app-grid">
+        <nav role="navigation" aria-label="Main navigation" className="sidebar">
+          <section className="card" role="region" aria-labelledby="upload-analyze-heading">
+            <div className="card-header">
+              <h2 id="upload-analyze-heading">Upload & Analyze</h2>
+              <span className="card-tag">Batch mode</span>
             </div>
-          )}
-
-          {treeData.cellData && treeData.cellData.length > 0 && (
-            <GatingOverview
-              cellData={treeData.cellData}
-              markers={treeData.markers || []}
-            />
-          )}
-
-          {treeData.cellData && treeData.cellData.length > 0 && (
-            <div style={{ marginBottom: '30px' }}>
-              <h3>Interactive Cell Distribution</h3>
-              <CellScatter
-                cellData={treeData.cellData}
-                markers={treeData.markers || []}
-                phenotypes={treeData.phenotypes}
-                xMarker={scatterXMarker}
-                yMarker={scatterYMarker}
-                onMarkerChange={(x, y) => {
-                  setScatterXMarker(x)
-                  setScatterYMarker(y)
-                }}
-                selectedPopulation={
-                  selectedPhenotype && treeData.phenotypes
-                    ? treeData.phenotypes.find((p) => p.key === selectedPhenotype)?.population
-                    : undefined
-                }
+            <label className="file-input">
+              <span>Select FCS files</span>
+              <input
+                type="file"
+                multiple
+                accept=".fcs"
+                onChange={handleFileSelect}
+                disabled={analyzing}
+                aria-describedby="file-input-help"
+              />
+            </label>
+            <span id="file-input-help" className="sr-only">Select one or more FCS files to analyze</span>
+            {selectedFiles && selectedFiles.length > 0 && (
+              <p className="muted" aria-live="polite">{selectedFiles.length} file(s) selected</p>
+            )}
+            <div className="slider-row">
+              <label htmlFor="threshold-slider">
+                Threshold (t)
+                <span>{threshold.toFixed(2)}</span>
+              </label>
+              <input
+                id="threshold-slider"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={threshold}
+                onChange={(e) => setThreshold(parseFloat(e.target.value))}
+                disabled={analyzing}
+                aria-valuenow={threshold}
+                aria-valuemin={0}
+                aria-valuemax={1}
+                aria-label="Analysis threshold"
               />
             </div>
+            <button
+              className="primary-button"
+              onClick={handleAnalyze}
+              disabled={analyzing || !selectedFiles || selectedFiles.length === 0}
+              aria-busy={analyzing}
+            >
+              {analyzing ? 'Analyzing...' : 'Analyze'}
+            </button>
+            {analyzing && (
+              <div className="progress-block" style={{ '--progress': `${progress}%` } as CSSProperties} role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Analysis progress">
+                <p className="joke">{joke}</p>
+                <div className="progress-bar">
+                  <div className="progress-fill" />
+                </div>
+                <span className="progress-label">{progress}%</span>
+              </div>
+            )}
+            {error && <p className="error" role="alert">Error: {error}</p>}
+          </section>
+
+          <section className="card highlight-card" role="region" aria-labelledby="session-notes-heading">
+            <h3 id="session-notes-heading">Session Notes</h3>
+            <p className="muted">
+              Large batches can take a while on Render. Keep this tab open while the analysis runs.
+            </p>
+            <div className="stat-row">
+              <div>
+                <span>Threshold</span>
+                <strong>{threshold.toFixed(2)}</strong>
+              </div>
+              <div>
+                <span>Status</span>
+                <strong>{analyzing ? 'Running' : treeData ? 'Ready' : 'Idle'}</strong>
+              </div>
+            </div>
+          </section>
+        </nav>
+
+        <main id="main-content" className="content" role="main">
+          {!treeData && (
+            <section className="card empty-state" role="region" aria-labelledby="awaiting-analysis-heading">
+              <h2 id="awaiting-analysis-heading">Awaiting analysis</h2>
+              <p className="muted">
+                Upload one or more FCS files and hit Analyze to generate your population tree and scatter plots.
+              </p>
+            </section>
           )}
 
-          <div>
-            <h3>Population Tree</h3>
-            <TreeViz data={treeData} />
-          </div>
-        </div>
-      )}
+          {treeData && (
+            <>
+              <section className="card summary-card" role="region" aria-labelledby="analysis-results-heading">
+                <div>
+                  <h2 id="analysis-results-heading">Analysis Results</h2>
+                  <p className="muted">Summary of detected populations and markers.</p>
+                </div>
+                <div className="summary-metrics">
+                  <div>
+                    <span>Total Cells</span>
+                    <strong>{treeData.cells}</strong>
+                  </div>
+                  <div>
+                    <span>Populations</span>
+                    <strong>{treeData.populations}</strong>
+                  </div>
+                </div>
+                {treeData.markers && treeData.markers.length > 0 && (
+                  <div className="chips" aria-label="Detected markers">
+                    {treeData.markers.slice(0, 8).map((marker) => (
+                      <span className="chip" key={marker} aria-label={`Marker: ${marker}`}>{marker}</span>
+                    ))}
+                    {treeData.markers.length > 8 && (
+                      <span className="chip muted" aria-label={`Plus ${treeData.markers.length - 8} more markers`}>+{treeData.markers.length - 8} more</span>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {treeData.phenotypes && treeData.phenotypes.length > 0 && (
+                <section className="card" role="region" aria-labelledby="phenotype-filter-heading">
+                  <div className="card-header">
+                    <h2 id="phenotype-filter-heading">Phenotype Filter</h2>
+                    <span className="card-tag">{treeData.phenotypes.length} phenotypes</span>
+                  </div>
+                  <div className="button-grid" role="group" aria-label="Phenotype selection">
+                    <button
+                      onClick={() => setSelectedPhenotype(null)}
+                      className={`tag-button ${selectedPhenotype === null ? 'active' : ''}`}
+                      aria-pressed={selectedPhenotype === null}
+                    >
+                      All Cells ({treeData.cells})
+                    </button>
+                    {treeData.phenotypes.map((pheno) => (
+                      <button
+                        key={pheno.key}
+                        onClick={() => setSelectedPhenotype(pheno.key)}
+                        className={`tag-button ${selectedPhenotype === pheno.key ? 'active' : ''}`}
+                        title={`${pheno.count} cells (${(pheno.proportion * 100).toFixed(1)}%)`}
+                        aria-pressed={selectedPhenotype === pheno.key}
+                        aria-label={`${pheno.label} - ${(pheno.proportion * 100).toFixed(1)}% of cells`}
+                      >
+                        {pheno.label} ({(pheno.proportion * 100).toFixed(1)}%)
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {treeData.cellData && treeData.cellData.length > 0 && (
+                <section className="card" role="region" aria-labelledby="gating-overview-heading">
+                  <h2 id="gating-overview-heading">Gating Overview</h2>
+                  <GatingOverview
+                    cellData={treeData.cellData}
+                    markers={treeData.markers || []}
+                  />
+                </section>
+              )}
+
+              {treeData.cellData && treeData.cellData.length > 0 && (
+                <section className="card" role="region" aria-labelledby="interactive-cell-distribution-heading">
+                  <div className="card-header">
+                    <h2 id="interactive-cell-distribution-heading">Interactive Cell Distribution</h2>
+                    <span className="card-tag">Scatter</span>
+                  </div>
+                  <CellScatter
+                    cellData={treeData.cellData}
+                    markers={treeData.markers || []}
+                    phenotypes={treeData.phenotypes}
+                    xMarker={scatterXMarker}
+                    yMarker={scatterYMarker}
+                    onMarkerChange={(x, y) => {
+                      setScatterXMarker(x)
+                      setScatterYMarker(y)
+                    }}
+                    selectedPopulation={
+                      selectedPhenotype && treeData.phenotypes
+                        ? treeData.phenotypes.find((p) => p.key === selectedPhenotype)?.population
+                        : undefined
+                    }
+                  />
+                </section>
+              )}
+
+              <section className="card" role="region" aria-labelledby="population-tree-heading">
+                <h2 id="population-tree-heading">Population Tree</h2>
+                <TreeViz data={treeData} />
+              </section>
+            </>
+          )}
+        </main>
+      </div>
     </div>
   )
 }

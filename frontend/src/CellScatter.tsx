@@ -50,6 +50,8 @@ export default function CellScatter({
     const svg = d3.select(svgRef.current)
       .attr("width", width + margin.left + margin.right)
       .attr("height", height + margin.top + margin.bottom)
+      .attr("aria-label", "Cell Distribution Scatter Plot")
+      .attr("role", "img");
 
     const g = svg.append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`)
@@ -150,6 +152,8 @@ export default function CellScatter({
         }
         return useMode === 'phenotype_criteria' ? 0.5 : 0.6
       })
+      .attr("aria-label", (d: any) => `Cell at (${d.x.toFixed(2)}, ${d.y.toFixed(2)}), Population: ${d.population}`)
+      .attr("role", "img");
 
     // Add X axis
     const xAxis = d3.axisBottom(xScale)
@@ -168,6 +172,7 @@ export default function CellScatter({
       .attr("text-anchor", "middle")
       .attr("font-size", 12)
       .text(xLabel)
+      .attr("aria-hidden", "true"); // Hide from screen readers since it's redundant
 
     // Add Y label
     g.append("text")
@@ -177,6 +182,7 @@ export default function CellScatter({
       .attr("text-anchor", "middle")
       .attr("font-size", 12)
       .text(yLabel)
+      .attr("aria-hidden", "true"); // Hide from screen readers since it's redundant
 
     // Add title
     svg.append("text")
@@ -190,6 +196,7 @@ export default function CellScatter({
           ? `Phenotype Criteria: ${xLabel} vs ${yLabel}`
           : `Cell Distribution: ${xLabel} vs ${yLabel}`
       )
+      .attr("aria-hidden", "true"); // Hide from screen readers since it's redundant
   }, [cellData, xMarker, yMarker, selectedPopulation, useMode, xMarkerCriteria, yMarkerCriteria])
 
   return (
@@ -203,6 +210,7 @@ export default function CellScatter({
               value="marker"
               checked={useMode === 'marker'}
               onChange={() => setUseMode('marker')}
+              aria-label="Use marker axes"
             />
             {' '}Marker Axes
           </label>
@@ -213,6 +221,7 @@ export default function CellScatter({
               value="phenotype_criteria"
               checked={useMode === 'phenotype_criteria'}
               onChange={() => setUseMode('phenotype_criteria')}
+              aria-label="Use phenotype criteria"
             />
             {' '}Phenotype Criteria
           </label>
@@ -226,6 +235,7 @@ export default function CellScatter({
                 value={xMarker}
                 onChange={(e) => onMarkerChange(e.target.value, yMarker)}
                 style={{ marginLeft: '8px', padding: '4px' }}
+                aria-label="Select X-axis marker"
               >
                 {markers.map((m) => (
                   <option key={m} value={m}>
@@ -240,6 +250,7 @@ export default function CellScatter({
                 value={yMarker}
                 onChange={(e) => onMarkerChange(xMarker, e.target.value)}
                 style={{ marginLeft: '8px', padding: '4px' }}
+                aria-label="Select Y-axis marker"
               >
                 {markers.map((m) => (
                   <option key={m} value={m}>
@@ -258,6 +269,7 @@ export default function CellScatter({
                   value={xMarkerCriteria.marker}
                   onChange={(e) => setXMarkerCriteria({ ...xMarkerCriteria, marker: e.target.value })}
                   style={{ marginLeft: '8px', padding: '4px' }}
+                  aria-label="Select X-axis marker for phenotype criteria"
                 >
                   {markers.map((m) => (
                     <option key={m} value={m}>
@@ -272,6 +284,7 @@ export default function CellScatter({
                   value={xMarkerCriteria.value}
                   onChange={(e) => setXMarkerCriteria({ ...xMarkerCriteria, value: parseInt(e.target.value) as 0 | 1 })}
                   style={{ marginLeft: '8px', padding: '4px' }}
+                  aria-label="Select X-axis value for phenotype criteria"
                 >
                   <option value={0}>0 (Negative)</option>
                   <option value={1}>1 (Positive)</option>
@@ -285,6 +298,7 @@ export default function CellScatter({
                   value={yMarkerCriteria.marker}
                   onChange={(e) => setYMarkerCriteria({ ...yMarkerCriteria, marker: e.target.value })}
                   style={{ marginLeft: '8px', padding: '4px' }}
+                  aria-label="Select Y-axis marker for phenotype criteria"
                 >
                   {markers.map((m) => (
                     <option key={m} value={m}>
@@ -299,6 +313,7 @@ export default function CellScatter({
                   value={yMarkerCriteria.value}
                   onChange={(e) => setYMarkerCriteria({ ...yMarkerCriteria, value: parseInt(e.target.value) as 0 | 1 })}
                   style={{ marginLeft: '8px', padding: '4px' }}
+                  aria-label="Select Y-axis value for phenotype criteria"
                 >
                   <option value={0}>0 (Negative)</option>
                   <option value={1}>1 (Positive)</option>
@@ -308,10 +323,15 @@ export default function CellScatter({
           </>
         )}
       </div>
-      <svg ref={svgRef} style={{ border: '1px solid #ddd', borderRadius: '5px' }} />
+      <svg
+        ref={svgRef}
+        style={{ border: '1px solid #ddd', borderRadius: '5px' }}
+        aria-label="Cell distribution scatter plot showing relationship between markers"
+        role="img"
+      />
 
       {/* Legend */}
-      <div style={{ marginTop: '15px', display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
+      <div style={{ marginTop: '15px', display: 'flex', flexWrap: 'wrap', gap: '15px' }} aria-label="Population legend">
         {Array.from(new Set(cellData.map((d) => (d.population as number) || 0))).sort((a, b) => a - b).map((popId) => (
           <div key={popId} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div
@@ -321,6 +341,8 @@ export default function CellScatter({
                 backgroundColor: POPULATION_COLORS[popId % POPULATION_COLORS.length],
                 borderRadius: '2px',
               }}
+              aria-label={`Population ${popId} color indicator`}
+              role="img"
             />
             <span style={{ fontSize: '13px', color: '#333' }}>Population {popId}</span>
           </div>

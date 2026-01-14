@@ -102,6 +102,8 @@ export default function GatingOverview({
         .style('margin', '10px')
         .style('border', '1px solid #ddd')
         .style('borderRadius', '5px')
+        .attr('aria-label', `${xMarker} vs ${yMarker} scatter plot`)
+        .attr('role', 'img');
 
       // Add background
       svg.append('rect').attr('width', width).attr('height', height).attr('fill', '#fafafa')
@@ -121,6 +123,8 @@ export default function GatingOverview({
         .attr('r', 1.5)
         .attr('fill', (d) => POPULATION_COLORS[d.population % POPULATION_COLORS.length])
         .attr('opacity', (d) => visiblePopulations.has(d.population) ? 0.6 : 0.05)
+        .attr('aria-label', (d: any) => `Cell at (${d.x.toFixed(2)}, ${d.y.toFixed(2)}), Population: ${d.population}`)
+        .attr('role', 'img');
 
       // Add X axis
       const xAxis = d3.axisBottom(xScale).ticks(4)
@@ -139,6 +143,7 @@ export default function GatingOverview({
         .attr('text-anchor', 'middle')
         .attr('font-size', '11px')
         .text(xMarker)
+        .attr('aria-hidden', 'true'); // Hide from screen readers since it's redundant
 
       // Add Y label
       g.append('text')
@@ -148,6 +153,7 @@ export default function GatingOverview({
         .attr('text-anchor', 'middle')
         .attr('font-size', '11px')
         .text(yMarker)
+        .attr('aria-hidden', 'true'); // Hide from screen readers since it's redundant
 
       // Add title
       svg.append('text')
@@ -157,6 +163,7 @@ export default function GatingOverview({
         .attr('font-size', '12px')
         .attr('font-weight', 'bold')
         .text(`${xMarker} vs ${yMarker}`)
+        .attr('aria-hidden', 'true'); // Hide from screen readers since it's redundant
     })
   }, [cellData, markers, combinations, visiblePopulations])
 
@@ -173,6 +180,7 @@ export default function GatingOverview({
           flexWrap: 'wrap',
           gap: '10px',
         }}
+        aria-label="Gating overview plots"
       />
 
       {/* Interactive Legend */}
@@ -180,7 +188,7 @@ export default function GatingOverview({
         <p style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>
           Click populations to toggle visibility:
         </p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }} role="group" aria-label="Population visibility toggles">
           {Array.from(new Set(cellData.map((d) => (d.population as number) || 0)))
             .sort((a, b) => a - b)
             .map((popId) => (
@@ -199,6 +207,8 @@ export default function GatingOverview({
                   opacity: visiblePopulations.has(popId) ? 1 : 0.5,
                   transition: 'all 0.2s',
                 }}
+                aria-pressed={!visiblePopulations.has(popId)}
+                aria-label={`Toggle visibility for population ${popId}`}
               >
                 <div
                   style={{
@@ -207,6 +217,7 @@ export default function GatingOverview({
                     backgroundColor: POPULATION_COLORS[popId % POPULATION_COLORS.length],
                     borderRadius: '2px',
                   }}
+                  aria-hidden="true"
                 />
                 <span style={{ fontSize: '12px', color: '#333', fontWeight: '500' }}>
                   Population {popId}

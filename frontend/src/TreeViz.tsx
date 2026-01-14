@@ -34,6 +34,8 @@ export default function TreeViz({ data }: { data: TreeData }) {
     const svg = d3.select(svgRef.current)
       .attr("width", width)
       .attr("height", height)
+      .attr("aria-label", "Population Tree Visualization")
+      .attr("role", "img");
 
     // Add background
     svg.append("rect")
@@ -62,6 +64,7 @@ export default function TreeViz({ data }: { data: TreeData }) {
       .join("line")
       .attr("stroke", "#ddd")
       .attr("stroke-width", 1.5)
+      .attr("aria-label", (d: any) => `Connection from node ${d.source.id} to node ${d.target.id}`);
 
     // Draw nodes
     const node = g.append("g")
@@ -76,6 +79,8 @@ export default function TreeViz({ data }: { data: TreeData }) {
       .attr("fill", "#69b3a2")
       .attr("stroke", "#fff")
       .attr("stroke-width", 2)
+      .attr("aria-label", (d: any) => `Population: ${d.name}, Cells: ${d.cells || 0}`)
+      .attr("role", "img");
 
     // Add labels
     const label = g.append("g")
@@ -91,6 +96,7 @@ export default function TreeViz({ data }: { data: TreeData }) {
       })
       .attr("dy", 4)
       .attr("fill", "#333")
+      .attr("aria-hidden", "true"); // Hide labels from screen readers since they're redundant
 
     // Update positions on tick
     simulation.on("tick", () => {
@@ -141,6 +147,8 @@ export default function TreeViz({ data }: { data: TreeData }) {
           borderRadius: '5px',
           display: 'block'
         }}
+        aria-label="Population Tree Visualization showing relationships between cell populations"
+        role="img"
       />
     </div>
   )
