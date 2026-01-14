@@ -58,7 +58,15 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Trigger Render Deploy Hook
-        if: success()
+      - name: Validate Render deploy hook
+        if: ${{ secrets.RENDER_DEPLOY_HOOK == '' }}
         run: |
-          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+          echo "RENDER_DEPLOY_HOOK secret is not set for this workflow." >&2
+          exit 1
+
+      - name: Trigger Render Deploy Hook
+        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
