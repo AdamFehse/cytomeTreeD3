@@ -1,0 +1,58 @@
+# Claude Code
+.claude
+
+# Frontend (Node.js / React)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env.local
+frontend/.env.*.local
+frontend/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Backend (R)
+backend/.Rhistory
+backend/.RData
+backend/.Rproj.user/
+*.Rproj
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.sublime-project
+.sublime-workspace
+
+# Build/Temp files
+dist/
+build/
+.next/
+out/
+.cache/
+
+# Project-specific
+/flowdata/
+*.pdf
+download.png
+plan.md
+
+# Docker
+.dockerignore
