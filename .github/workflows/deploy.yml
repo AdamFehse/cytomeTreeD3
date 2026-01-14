@@ -37,7 +37,7 @@ jobs:
           cd frontend
           BASE_URL="/${{ github.event.repository.name }}" npm run build
         env:
-          VITE_API_URL: "https://cytotree-backend.onrender.com"
+          VITE_API_URL: "https://cytometreed3.onrender.com"
           
       - name: Setup Pages
         uses: actions/configure-pages@v4

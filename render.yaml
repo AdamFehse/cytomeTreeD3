@@ -11,4 +11,4 @@ services:
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
-        value: https://cytotree-backend.onrender.com
+        value: https://cytometreed3.onrender.com
