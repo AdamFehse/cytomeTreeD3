@@ -8,4 +8,4 @@ COPY api.R .
 
 EXPOSE 8000
 
-CMD ["R", "-e", "plumber::plumb('api.R')$run(host='0.0.0.0',port=8000)"]
+CMD ["R", "-e", "plumber::plumb('api.R')$run(host='0.0.0.0',port=as.numeric(Sys.getenv('PORT', unset = 8000)))"]
