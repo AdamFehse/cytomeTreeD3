@@ -2,6 +2,9 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 permissions:
@@ -53,17 +56,7 @@ jobs:
       url: ${{ steps.deployment.outputs.pages_url }}
     runs-on: ubuntu-latest
     needs: build
-    env:
-      RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-      - name: Trigger Render Deploy Hook
-        run: |
-          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
-            echo "RENDER_DEPLOY_HOOK secret is not set for this workflow." >&2
-            exit 1
-          fi
-          curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
