@@ -18,7 +18,12 @@ interface TreeData {
   links: Link[]
 }
 
-export default function TreeViz({ data }: { data: TreeData }) {
+interface TreeVizProps {
+  data: TreeData
+  onLeafNodeClick?: (nodeId: number) => void
+}
+
+export default function TreeViz({ data, onLeafNodeClick }: TreeVizProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -104,6 +109,21 @@ export default function TreeViz({ data }: { data: TreeData }) {
         .attr("stroke-width", 2)
         .attr("aria-label", (d: any) => `Population: ${d.data.name}, Cells: ${d.data.cells || 0}`)
         .attr("role", "img")
+        .on("click", (event, d: any) => {
+          // Only trigger for leaf nodes (have cells property)
+          if (d.data.cells && onLeafNodeClick) {
+            onLeafNodeClick(d.data.id)
+          }
+        })
+        .on("mouseover", function(event, d: any) {
+          if (d.data.cells || d.data.id) {
+            d3.select(this).attr("stroke-width", 3)
+          }
+        })
+        .on("mouseout", function() {
+          d3.select(this).attr("stroke-width", 2)
+        })
+        .style("cursor", (d: any) => d.data.cells ? "pointer" : "default")
 
       g.append("g")
         .selectAll("text")
@@ -165,7 +185,22 @@ export default function TreeViz({ data }: { data: TreeData }) {
       .attr("stroke", "#fff")
       .attr("stroke-width", 2)
       .attr("aria-label", (d: any) => `Population: ${d.name}, Cells: ${d.cells || 0}`)
-      .attr("role", "img");
+      .attr("role", "img")
+      .on("click", (event, d: any) => {
+        // Only trigger for leaf nodes (have cells property)
+        if (d.cells && onLeafNodeClick) {
+          onLeafNodeClick(d.id)
+        }
+      })
+      .on("mouseover", function(event, d: any) {
+        if (d.cells || d.id) {
+          d3.select(this).attr("stroke-width", 3)
+        }
+      })
+      .on("mouseout", function() {
+        d3.select(this).attr("stroke-width", 2)
+      })
+      .style("cursor", (d: any) => d.cells ? "pointer" : "default");
 
     // Add labels
     const label = g.append("g")

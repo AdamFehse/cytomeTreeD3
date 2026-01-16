@@ -3,6 +3,63 @@ library(cytometree)
 library(IFC)
 library(jsonlite)
 
+# Extract biological marker names from FCS file metadata
+# Returns mapping of detector names to biological marker names
+extract_marker_metadata <- function(fcs_description) {
+  marker_map <- list()
+
+  # FCS standard: $P1N, $P2N... = detector names (FL1-H, SSC-A, etc.)
+  #               $P1S, $P2S... = biological marker names (CD20, CD23, etc.)
+
+  # Find all parameter indices ($P1N, $P2N, etc.)
+  param_keys <- grep("^\\$P[0-9]+N$", names(fcs_description), value = TRUE)
+
+  for (param_key in param_keys) {
+    # Extract parameter number (e.g., "1" from "$P1N")
+    param_num <- gsub("^\\$P([0-9]+)N$", "\\1", param_key)
+
+    # Get detector name ($PnN)
+    detector_name <- fcs_description[[param_key]]
+    if (!is.null(detector_name)) {
+      detector_name <- as.character(detector_name)
+
+      # Get biological marker name ($PnS) - this is what we prefer
+      marker_key <- paste0("$P", param_num, "S")
+      biological_marker <- fcs_description[[marker_key]]
+
+      # Use biological marker if available, otherwise use detector name
+      marker_name <- if (!is.null(biological_marker) && nchar(as.character(biological_marker)) > 0) {
+        as.character(biological_marker)
+      } else {
+        detector_name
+      }
+
+      # Store mapping
+      marker_map[[detector_name]] <- list(
+        technical = detector_name,
+        biological = marker_name
+      )
+    }
+  }
+
+  return(marker_map)
+}
+
+# Extract marker intensity ranges (min/max) for coordinate space understanding
+# Helps LLM understand the distribution and thresholds in context
+extract_marker_ranges <- function(data, markers) {
+  marker_ranges <- list()
+  for (marker in markers) {
+    if (marker %in% colnames(data)) {
+      marker_ranges[[marker]] <- list(
+        min = round(min(data[, marker], na.rm = TRUE), 2),
+        max = round(max(data[, marker], na.rm = TRUE), 2)
+      )
+    }
+  }
+  return(marker_ranges)
+}
+
 # Use standard multipart parser for file uploads
 
 #* @filter cors
@@ -33,6 +90,7 @@ function(req, res) {
 
     # Load and combine all files (each file should have base64 encoded content)
     all_data <- NULL
+    fcs_metadata <- NULL  # Will store marker metadata from first file
 
     # Handle data.frame or list format
     num_files <- if (is.data.frame(files_data)) nrow(files_data) else length(files_data)
@@ -58,6 +116,10 @@ function(req, res) {
         fcs <- IFC::readFCS(fileName = temp_file)
         fcs_data <- as.matrix(fcs[[1]]$data)
 
+        # Extract marker metadata from first file only (assume batch has same panel)
+        if (i == 1 && is.null(fcs_metadata)) {
+          fcs_metadata <- extract_marker_metadata(fcs[[1]]$description)
+        }
 
         if (is.null(all_data)) {
           all_data <- fcs_data
@@ -97,6 +159,9 @@ function(req, res) {
       colnames(data) <- colnames(all_data)
       markers <- colnames(data)
     }
+
+    # Extract marker ranges for coordinate space understanding (LLM context)
+    marker_ranges <- extract_marker_ranges(data, markers)
 
     tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
 
@@ -293,6 +358,8 @@ function(req, res) {
       populations = length(unique(tree$labels)),
       cells = nrow(data),
       markers = as.list(markers),
+      markerMappings = fcs_metadata %||% list(),  # Add marker metadata (empty if not available)
+      markerRanges = marker_ranges,  # Marker intensity ranges for coordinate space understanding
       cellData = cell_data,
       cellDataMarkers = list(x = marker_x, y = marker_y),
       phenotypes = phenotypes_list

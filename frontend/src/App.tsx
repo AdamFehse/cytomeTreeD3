@@ -23,6 +23,8 @@ interface TreeData {
   populations: number
   cells: number
   markers?: string[]
+  markerMappings?: Record<string, { technical: string; biological: string }>
+  markerRanges?: Record<string, { min: number; max: number }>
   cellData?: Array<{ x: number; y: number; population: number }>
   cellDataMarkers?: { x: string; y: string }
   phenotypes?: Phenotype[]
@@ -52,6 +54,12 @@ function App() {
   const [aiInsight, setAiInsight] = useState<Record<string, unknown> | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
+  const [aiCitations, setAiCitations] = useState<Array<any>>([])
+  const [researchContext, setResearchContext] = useState<string>('')
+  const [granularInsight, setGranularInsight] = useState<Record<string, unknown> | null>(null)
+  const [granularLoading, setGranularLoading] = useState(false)
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
+  const [showGranularModal, setShowGranularModal] = useState(false)
 
   // Skip link functionality
   const skipToMainContent = () => {
@@ -113,16 +121,23 @@ function App() {
     void runAiInsights(treeData)
   }, [aiModels, treeData, aiLoading, aiInsight, aiError])
 
-  const callWorker = async (prompt: string, model?: string, type?: 'engagement' | 'insights') => {
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), 30000)
-
+  const callWorker = async (
+    prompt: string,
+    model?: string,
+    type?: 'engagement' | 'insights',
+    analysisMode?: 'comprehensive' | 'granular',
+    nodeId?: number
+  ) => {
     try {
+      const requestBody: any = { text: prompt, model, type }
+      if (researchContext) requestBody.researchContext = researchContext
+      if (analysisMode) requestBody.analysisMode = analysisMode
+      if (nodeId !== undefined) requestBody.nodeId = nodeId
+
       const response = await fetch(DEFAULT_WORKER, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: prompt, model, type }),
-        signal: controller.signal
+        body: JSON.stringify(requestBody)
       })
 
       if (!response.ok) {
@@ -130,10 +145,56 @@ function App() {
         throw new Error(`AI request failed (${response.status}). ${body}`)
       }
 
-      return response.json()
-    } finally {
-      window.clearTimeout(timeoutId)
+      const text = await response.text()
+      try {
+        return JSON.parse(text)
+      } catch (e) {
+        console.error('JSON parse error. Response text:', text.substring(0, 500))
+        throw new Error(`Invalid JSON response from AI: ${e instanceof Error ? e.message : 'Unknown error'}`)
+      }
+    } catch (err) {
+      throw err
     }
+  }
+
+  const runGranularAnalysis = async (nodeId: number) => {
+    setGranularLoading(true)
+    setGranularInsight(null)
+    setSelectedNodeId(nodeId)
+    setShowGranularModal(true)
+
+    try {
+      if (!treeData || !aiModel) return
+      const phenotype = treeData.phenotypes?.find(p => p.population === nodeId)
+      if (!phenotype) {
+        setGranularInsight({ error: 'Phenotype not found' })
+        return
+      }
+
+      const payload = buildAiPayload(treeData)
+      const result = await callWorker(
+        JSON.stringify(payload),
+        aiModel,
+        'insights',
+        'granular',
+        nodeId
+      )
+      setGranularInsight(result)
+    } catch (error) {
+      console.error('Granular analysis error:', error)
+      setGranularInsight({ error: 'Failed to analyze node' })
+    } finally {
+      setGranularLoading(false)
+    }
+  }
+
+  const handleLeafNodeClick = (nodeId: number) => {
+    // Verify node exists in phenotype data
+    if (!treeData?.phenotypes) return
+    const node = treeData.phenotypes.find(p => p.population === nodeId)
+    if (!node) return
+
+    runGranularAnalysis(nodeId)
   }
 
   const fetchEngagementLines = async () => {
@@ -181,27 +242,22 @@ function App() {
 
 
   const buildAiPayload = (data: TreeData) => {
-    const treeNodes = data.treeNodes && data.treeNodes.length > 0 ? data.treeNodes : data.nodes
-    const treeLinks = data.treeLinks && data.treeLinks.length > 0 ? data.treeLinks : data.links
+    const biologicalMarkers = data.markerMappings
+      ? Object.values(data.markerMappings)
+          .map(m => m.biological)
+          .filter(m => m && !m.match(/^FL[0-9]/))
+      : []
+
     return {
       summary: {
         total_cells: data.cells,
         populations: data.populations,
         markers: data.markers || [],
-        scatter_markers: data.cellDataMarkers || null
+        biologicalMarkers: biologicalMarkers,
+        markerMappings: data.markerMappings || {},
+        markerRanges: data.markerRanges || {}
       },
-      tree: {
-        nodes: treeNodes.slice(0, 200),
-        links: treeLinks.slice(0, 400)
-      },
-      phenotypes: data.phenotypes ? data.phenotypes.slice(0, 120) : [],
-      notes: {
-        cell_data_included: false,
-        omitted: ['cellData'],
-        node_limit: 200,
-        link_limit: 400,
-        phenotype_limit: 120
-      }
+      phenotypes: data.phenotypes ? data.phenotypes.slice(0, 80) : []
     }
   }
 
@@ -212,27 +268,14 @@ function App() {
     setAiLoading(true)
     setAiError(null)
     setAiInsight(null)
+    setAiCitations([])
     try {
       const payload = buildAiPayload(data)
-      const prompt = [
-        'You are an expert cytometry analyst.',
-        'Analyze the JSON dataset and return concise insights for a dashboard viewer.',
-        'Return ONLY valid JSON with these keys:',
-        '{',
-        '  "summary": "2-4 sentences explaining the overall result",',
-        '  "key_findings": ["bullet", "bullet"],',
-        '  "notable_populations": ["name or label with reason"],',
-        '  "anomalies": ["potential issues or flags"],',
-        '  "suggested_next_steps": ["action", "action"],',
-        '  "visualization_tips": ["tip", "tip"]',
-        '}',
-        '',
-        'DATA:',
-        JSON.stringify(payload)
-      ].join('\n')
-
-      const result = await callWorker(prompt, aiModel, 'insights')
+      const result = await callWorker(JSON.stringify(payload), aiModel, 'insights')
       setAiInsight(result)
+      if (result.citations && Array.isArray(result.citations)) {
+        setAiCitations(result.citations)
+      }
     } catch (err) {
       setAiError(err instanceof Error ? err.message : 'AI request failed')
     } finally {
@@ -247,9 +290,51 @@ function App() {
     return (
       <ul className="ai-list">
         {value.map((item, index) => (
-          <li key={`${index}-${String(item)}`}>{String(item)}</li>
+          <li key={`item-${index}`} className="ai-list-item">{String(item)}</li>
         ))}
       </ul>
+    )
+  }
+
+  const renderCitations = () => {
+    if (!aiCitations || aiCitations.length === 0) {
+      return null
+    }
+    return (
+      <section className="ai-citations-section" style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--stroke)' }}>
+        <h4 style={{ marginBottom: '12px', fontSize: '14px', fontWeight: 600, color: 'var(--ink)' }}>Research Papers</h4>
+        <div className="citations-list">
+          {aiCitations.map((citation, index) => (
+            <div key={`citation-${index}`} className="citation-item" style={{
+              padding: '12px',
+              marginBottom: '8px',
+              backgroundColor: 'var(--panel)',
+              borderLeft: '3px solid var(--accent)',
+              borderRadius: '4px'
+            }}>
+              <div style={{ marginBottom: '4px' }}>
+                <a
+                  href={`https://pubmed.ncbi.nlm.nih.gov/${citation.pmid}/`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}
+                >
+                  {citation.title || 'Untitled'}
+                </a>
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '4px' }}>
+                {citation.authors && <span>{citation.authors}</span>}
+                {citation.pubdate && <span> • {citation.pubdate}</span>}
+              </div>
+              {citation.relevance && (
+                <div style={{ fontSize: '12px', color: 'var(--ink)', fontStyle: 'italic' }}>
+                  {citation.relevance}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
     )
   }
 
@@ -264,6 +349,7 @@ function App() {
     setProgress(0)
     setAiError(null)
     setAiInsight(null)
+    setAiCitations([])
     setAiJokes([])
     setAiFacts([])
     setAiTrivia([])
@@ -424,6 +510,31 @@ function App() {
               <h2 id="upload-analyze-heading">Upload & Analyze</h2>
               <span className="card-tag">Batch mode</span>
             </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label htmlFor="research-context" style={{ display: 'block', marginBottom: '4px', fontWeight: 600 }}>
+                Research Context <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span>
+              </label>
+              <input
+                id="research-context"
+                type="text"
+                value={researchContext}
+                onChange={(e) => setResearchContext(e.target.value)}
+                placeholder="e.g., Chronic Lymphocytic Leukemia"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--stroke)',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  color: 'var(--ink)',
+                  backgroundColor: 'var(--panel)',
+                  fontFamily: 'inherit'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: 'var(--muted)', margin: '4px 0 0 0' }}>
+                Provide disease/condition context for more accurate phenotype mapping
+              </p>
+            </div>
             <label className="file-input">
               <span>Select FCS files</span>
               <input
@@ -482,7 +593,7 @@ function App() {
           <section className="card highlight-card" role="region" aria-labelledby="session-notes-heading">
             <h3 id="session-notes-heading">Session Notes</h3>
             <p className="muted">
-              Large batches can take a while on Render. Keep this tab open while the analysis runs.
+              Large batches can take a while on Render(5+ min for 6mb of fcs files). Keep this tab open while the analysis runs.
             </p>
             <div className="stat-row">
               <div>
@@ -573,31 +684,44 @@ function App() {
                 )}
                 {aiError && <p className="error">{aiError}</p>}
                 {aiInsight && (
-                  <div className="ai-grid">
-                    <section className="ai-section">
-                      <h3>Summary</h3>
-                      <p>{String(aiInsight.summary || 'Not observed.')}</p>
-                    </section>
-                    <section className="ai-section">
-                      <h3>Key Findings</h3>
-                      {renderAiList(aiInsight.key_findings)}
-                    </section>
-                    <section className="ai-section">
-                      <h3>Notable Populations</h3>
-                      {renderAiList(aiInsight.notable_populations)}
-                    </section>
-                    <section className="ai-section">
-                      <h3>Anomalies</h3>
-                      {renderAiList(aiInsight.anomalies)}
-                    </section>
-                    <section className="ai-section">
-                      <h3>Suggested Next Steps</h3>
-                      {renderAiList(aiInsight.suggested_next_steps)}
-                    </section>
-                    <section className="ai-section">
-                      <h3>Visualization Tips</h3>
-                      {renderAiList(aiInsight.visualization_tips)}
-                    </section>
+                  <div className="ai-insights-container">
+                    <div className="ai-grid">
+                      {aiInsight.phenotype_mapping && (
+                        <section className="ai-section" style={{ gridColumn: '1 / -1' }}>
+                          <h3>Phenotype Mapping</h3>
+                          {renderAiList(aiInsight.phenotype_mapping)}
+                        </section>
+                      )}
+
+                      {aiInsight.dominant_lineage && (
+                        <section className="ai-section">
+                          <h3>Dominant Lineage</h3>
+                          <p className="ai-insight-text">{String(aiInsight.dominant_lineage)}</p>
+                        </section>
+                      )}
+
+                      {aiInsight.rare_subsets && (
+                        <section className="ai-section">
+                          <h3>Rare Subsets</h3>
+                          {renderAiList(aiInsight.rare_subsets)}
+                        </section>
+                      )}
+
+                      {aiInsight.artifact_flags && (
+                        <section className="ai-section">
+                          <h3>Artifact Flags</h3>
+                          {renderAiList(aiInsight.artifact_flags)}
+                        </section>
+                      )}
+
+                      {aiInsight.key_findings && (
+                        <section className="ai-section" style={{ gridColumn: '1 / -1' }}>
+                          <h3>Key Findings</h3>
+                          {renderAiList(aiInsight.key_findings)}
+                        </section>
+                      )}
+                    </div>
+                    {renderCitations()}
                   </div>
                 )}
                 {!aiLoading && !aiError && !aiInsight && aiModels.length > 0 && (
@@ -619,9 +743,9 @@ function App() {
                     >
                       All Cells ({treeData.cells})
                     </button>
-                    {treeData.phenotypes.map((pheno) => (
+                    {treeData.phenotypes.map((pheno, index) => (
                       <button
-                        key={pheno.key}
+                        key={`pheno-${index}`}
                         onClick={() => setSelectedPhenotype(pheno.key)}
                         className={`tag-button ${selectedPhenotype === pheno.key ? 'active' : ''}`}
                         title={`${pheno.count} cells (${(pheno.proportion * 100).toFixed(1)}%)`}
@@ -677,12 +801,70 @@ function App() {
                     nodes: treeData.treeNodes && treeData.treeNodes.length > 0 ? treeData.treeNodes : treeData.nodes,
                     links: treeData.treeLinks && treeData.treeLinks.length > 0 ? treeData.treeLinks : treeData.links
                   }}
+                  onLeafNodeClick={handleLeafNodeClick}
                 />
               </section>
             </>
           )}
         </main>
       </div>
+
+      {/* Granular Analysis Modal */}
+      {showGranularModal && (
+        <div className="modal-overlay" onClick={() => setShowGranularModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="modal-close"
+              onClick={() => setShowGranularModal(false)}
+              aria-label="Close modal"
+            >
+              ×
+            </button>
+            <h2>Population {selectedNodeId} Analysis</h2>
+            {granularLoading && <p style={{ color: 'var(--muted)' }}>Analyzing phenotype...</p>}
+            {granularInsight && !granularLoading && (
+              <div>
+                {granularInsight.error && (
+                  <p className="error">{String(granularInsight.error)}</p>
+                )}
+                {granularInsight.phenotype_name && (
+                  <section style={{ marginBottom: '16px' }}>
+                    <h3>Phenotype Name</h3>
+                    <p>{String(granularInsight.phenotype_name)}</p>
+                  </section>
+                )}
+                {granularInsight.biological_significance && (
+                  <section style={{ marginBottom: '16px' }}>
+                    <h3>Biological Significance</h3>
+                    <p>{String(granularInsight.biological_significance)}</p>
+                  </section>
+                )}
+                {granularInsight.clinical_relevance && (
+                  <section style={{ marginBottom: '16px' }}>
+                    <h3>Clinical Relevance</h3>
+                    <div
+                      className="inline-citations"
+                      dangerouslySetInnerHTML={{ __html: String(granularInsight.clinical_relevance) }}
+                    />
+                  </section>
+                )}
+                {granularInsight.marker_interpretation && typeof granularInsight.marker_interpretation === 'object' && (
+                  <section style={{ marginBottom: '16px' }}>
+                    <h3>Per-Marker Interpretation</h3>
+                    <ul className="ai-list">
+                      {Object.entries(granularInsight.marker_interpretation).map(([marker, interp]: [string, any]) => (
+                        <li key={marker}>
+                          <strong>{marker}:</strong> {String(interp)}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
