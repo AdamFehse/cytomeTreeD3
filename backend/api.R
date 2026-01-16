@@ -244,18 +244,12 @@ function(req, res) {
     }
 
     # Send all marker values for each cell so frontend can compute any scatter plot
-    cell_data <- list()
-    for (i in seq_along(sample_indices)) {
-      cell_idx <- sample_indices[i]
-      marker_values <- list()
-      for (j in seq_along(markers)) {
-        marker_values[[markers[j]]] <- as.numeric(data[cell_idx, j])
-      }
-      cell_data[[i]] <- c(
+    cell_data <- lapply(sample_indices, function(cell_idx) {
+      c(
         list(population = as.integer(tree$labels[cell_idx])),
-        marker_values
+        setNames(as.list(data[cell_idx, ]), markers)
       )
-    }
+    })
 
     # Use first two markers for initial display
     marker_x <- markers[1]
