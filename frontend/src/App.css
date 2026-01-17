@@ -170,6 +170,21 @@ body {
   border-radius: 999px;
 }
 
+.badge-fulltext {
+  color: #123a2a;
+  background: rgba(105, 179, 162, 0.2);
+}
+
+.badge-abstract {
+  color: var(--muted);
+  background: rgba(29, 27, 26, 0.05);
+}
+
+.badge-pdf {
+  color: #f9f1e4;
+  background: #2f2a22;
+}
+
 .file-input {
   display: flex;
   flex-direction: column;
@@ -611,6 +626,54 @@ input[type="radio"]:focus {
   text-decoration: underline;
 }
 
+/* Literature cards */
+.literature-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.literature-paper {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: var(--panel);
+}
+
+.literature-paper h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.literature-paper .muted {
+  margin: 4px 0 0 0;
+}
+
+.literature-paper-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.literature-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.literature-provenance {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.literature-links {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+
 /* Granular analysis modal */
 .modal-overlay {
   position: fixed;
@@ -664,6 +727,14 @@ input[type="radio"]:focus {
 .modal-content h2 {
   margin-top: 0;
   color: var(--ink);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .modal-content h3 {

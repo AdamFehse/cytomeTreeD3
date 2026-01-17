@@ -36,14 +36,39 @@ interface TreeData {
   phenotypes?: Phenotype[];
 }
 
+interface LiteraturePaper {
+  pmid: string;
+  title: string;
+  authors: string;
+  pubdate?: string;
+  source?: string;
+  fullTextAvailable?: boolean;
+  pmcId?: string | null;
+  pubmedUrl?: string | null;
+  pmcUrl?: string | null;
+  pdfUrl?: string | null;
+  excerpt?: string;
+  why?: string;
+  takeaway?: string;
+}
+
+interface LiteratureBucket {
+  label: string;
+  query: string;
+  tier: "marker" | "phenotype" | "combined";
+  papers: LiteraturePaper[];
+}
+
+interface LiteraturePayload {
+  markers: LiteratureBucket[];
+  phenotypes: LiteratureBucket[];
+  combined: LiteratureBucket | null;
+  queries?: Array<{ tier: string; label: string; query: string }>;
+}
+
 function App() {
   const [treeData, setTreeData] = useState<TreeData | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [joke, setJoke] = useState("");
-  const [aiJokes, setAiJokes] = useState<string[]>([]);
-  const [aiFacts, setAiFacts] = useState<string[]>([]);
-  const [aiTrivia, setAiTrivia] = useState<string[]>([]);
-  const [jokeIndex, setJokeIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [threshold, setThreshold] = useState(0.1);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
@@ -55,7 +80,6 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const progressTimerRef = useRef<number | null>(null);
-  const jokeTimerRef = useRef<number | null>(null);
   const elapsedTimerRef = useRef<number | null>(null);
   const [aiModels, setAiModels] = useState<string[]>([]);
   const [aiModel, setAiModel] = useState<string>("");
@@ -73,6 +97,10 @@ function App() {
   const [granularLoading, setGranularLoading] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [showGranularModal, setShowGranularModal] = useState(false);
+  const [literatureTierFilter, setLiteratureTierFilter] = useState<
+    "all" | "marker" | "phenotype" | "combined"
+  >("all");
+  const [fullTextOnly, setFullTextOnly] = useState(false);
 
   // Skip link functionality
   const skipToMainContent = () => {
@@ -117,25 +145,6 @@ function App() {
     return () => controller.abort();
   }, []);
 
-  const loadModelsOnce = async () => {
-    if (aiModels.length > 0) return aiModels;
-    try {
-      const response = await fetch(DEFAULT_WORKER);
-      if (!response.ok) return [];
-      const data = await response.json();
-      const models = Array.isArray(data.allowed_models)
-        ? data.allowed_models.filter(Boolean)
-        : [];
-      if (models.length > 0) {
-        setAiModels(models);
-        setAiModel((current) => current || models[0]);
-      }
-      return models;
-    } catch {
-      return [];
-    }
-  };
-
   useEffect(() => {
     if (
       !treeData ||
@@ -152,30 +161,46 @@ function App() {
   const callWorker = async (
     prompt: string,
     model?: string,
-    type?: "engagement" | "insights",
     analysisMode?: "comprehensive" | "granular",
     nodeId?: number,
   ) => {
     try {
-      const requestBody: any = { text: prompt, model, type };
+      const requestBody: any = { text: prompt, model };
       if (researchContext) requestBody.researchContext = researchContext;
       if (analysisMode) requestBody.analysisMode = analysisMode;
       if (nodeId !== undefined) requestBody.nodeId = nodeId;
 
+      // Log what we're sending
+      console.log("=== AI Insights Request ===");
+      console.log("Model:", model);
+      console.log("Analysis Mode:", analysisMode);
+      console.log("Request Body Keys:", Object.keys(requestBody));
+      console.log("Text/Prompt length:", prompt.length, "characters");
+      console.log("Full request body:", requestBody);
+      console.log("Stringified request size:", JSON.stringify(requestBody).length, "bytes");
+
+      const requestStr = JSON.stringify(requestBody);
       const response = await fetch(DEFAULT_WORKER, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
+        body: requestStr,
       });
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
+        console.error("AI request failed:", response.status, body);
         throw new Error(`AI request failed (${response.status}). ${body}`);
       }
 
       const text = await response.text();
+      console.log("=== AI Response ===");
+      console.log("Response size:", text.length, "characters");
+      console.log("Response preview:", text.substring(0, 300));
+
       try {
-        return JSON.parse(text);
+        const parsed = JSON.parse(text);
+        console.log("Parsed response keys:", Object.keys(parsed));
+        return parsed;
       } catch (e) {
         console.error(
           "JSON parse error. Response text:",
@@ -210,7 +235,6 @@ function App() {
       const result = await callWorker(
         JSON.stringify(payload),
         aiModel,
-        "insights",
         "granular",
         nodeId,
       );
@@ -232,52 +256,6 @@ function App() {
     runGranularAnalysis(nodeId);
   };
 
-  const fetchEngagementLines = async () => {
-    const models = await loadModelsOnce();
-    if (models.length === 0) {
-      console.log("No models available for engagement lines");
-      setAiJokes([]);
-      setAiFacts([]);
-      setAiTrivia([]);
-      return;
-    }
-    // Use the first (fastest) model from ALLOWED_MODELS
-    const model = models[0];
-    console.log("Fetching engagement lines with model:", model);
-
-    try {
-      const result = await callWorker("", model, "engagement");
-      console.log("Engagement API response:", result);
-      let payload = result;
-      if (typeof result === "string") {
-        try {
-          payload = JSON.parse(result);
-        } catch {
-          payload = result;
-        }
-      }
-      const lines = Array.isArray(payload?.lines)
-        ? payload.lines.filter(Boolean)
-        : Array.isArray(payload)
-          ? payload.filter(Boolean)
-          : [];
-      const facts = Array.isArray(payload?.facts)
-        ? payload.facts.filter(Boolean)
-        : [];
-      const trivia = Array.isArray(payload?.trivia)
-        ? payload.trivia.filter(Boolean)
-        : [];
-      console.log("Parsed engagement content:", { lines, facts, trivia });
-      setAiJokes(lines);
-      setAiFacts(facts);
-      setAiTrivia(trivia);
-    } catch (err) {
-      console.error("Engagement lines error:", err);
-      setAiJokes([]);
-      setAiFacts([]);
-      setAiTrivia([]);
-    }
-  };
 
   const buildAiPayload = (data: TreeData) => {
     const biologicalMarkers = data.markerMappings
@@ -286,7 +264,7 @@ function App() {
           .filter((m) => m && !m.match(/^FL[0-9]/))
       : [];
 
-    return {
+    const payload = {
       summary: {
         total_cells: data.cells,
         populations: data.populations,
@@ -297,29 +275,42 @@ function App() {
       },
       phenotypes: data.phenotypes ? data.phenotypes.slice(0, 80) : [],
     };
+
+    console.log("=== Built AI Payload ===");
+    console.log("Summary:", payload.summary);
+    console.log("Phenotypes count:", payload.phenotypes.length);
+    console.log("Phenotypes sample:", payload.phenotypes.slice(0, 3));
+    console.log("Full payload size:", JSON.stringify(payload).length, "bytes");
+
+    return payload;
   };
 
   const runAiInsights = async (data: TreeData) => {
     if (aiModels.length === 0 || !aiModel) {
       return;
     }
+    console.log("Starting AI Insights generation for model:", aiModel);
     setAiLoading(true);
     setAiError(null);
     setAiInsight(null);
     setAiCitations([]);
     try {
       const payload = buildAiPayload(data);
+      console.log("Calling AI worker with payload...");
       const result = await callWorker(
         JSON.stringify(payload),
         aiModel,
-        "insights",
       );
+      console.log("AI Insights result received:", result);
       setAiInsight(result);
       if (result.citations && Array.isArray(result.citations)) {
+        console.log("Found", result.citations.length, "citations");
         setAiCitations(result.citations);
       }
     } catch (err) {
-      setAiError(err instanceof Error ? err.message : "AI request failed");
+      const errorMsg = err instanceof Error ? err.message : "AI request failed";
+      console.error("AI Insights error:", errorMsg);
+      setAiError(errorMsg);
     } finally {
       setAiLoading(false);
     }
@@ -339,6 +330,70 @@ function App() {
       </ul>
     );
   };
+
+  const renderLiteraturePaper = (
+    paper: LiteraturePaper,
+    index: number,
+    provenance: string,
+  ) => (
+    <article
+      key={`${paper.pmid}-${index}`}
+      className="literature-paper"
+    >
+      <div className="literature-paper-header">
+        <div>
+          <h4>{paper.title}</h4>
+          <p className="muted">
+            {paper.authors}
+            {paper.pubdate ? ` • ${paper.pubdate}` : ""}
+          </p>
+        </div>
+        <div className="literature-badges">
+          {paper.fullTextAvailable ? (
+            <span className="card-tag badge-fulltext">Full Text</span>
+          ) : (
+            <span className="card-tag badge-abstract">Abstract Only</span>
+          )}
+          {paper.pdfUrl && (
+            <span className="card-tag badge-pdf">PDF</span>
+          )}
+        </div>
+      </div>
+      <p className="literature-provenance">{provenance}</p>
+      <p style={{ margin: "10px 0 6px 0" }}>
+        <strong>Why this paper:</strong>{" "}
+        {paper.why || "Matches the marker/phenotype query."}
+      </p>
+      {paper.takeaway && (
+        <p style={{ margin: "0 0 10px 0" }}>
+          <strong>Takeaway:</strong> {paper.takeaway}
+        </p>
+      )}
+      {paper.excerpt && (
+        <details>
+          <summary style={{ cursor: "pointer" }}>Excerpt</summary>
+          <p style={{ marginTop: "8px" }}>{paper.excerpt}</p>
+        </details>
+      )}
+      <div className="literature-links">
+        {paper.pubmedUrl && (
+          <a href={paper.pubmedUrl} target="_blank" rel="noreferrer">
+            PubMed
+          </a>
+        )}
+        {paper.pmcUrl && (
+          <a href={paper.pmcUrl} target="_blank" rel="noreferrer">
+            PMC
+          </a>
+        )}
+        {paper.pdfUrl && (
+          <a href={paper.pdfUrl} target="_blank" rel="noreferrer">
+            PDF
+          </a>
+        )}
+      </div>
+    </article>
+  );
 
   const renderCitations = () => {
     if (!aiCitations || aiCitations.length === 0) {
@@ -418,6 +473,32 @@ function App() {
     );
   };
 
+  const literature = (aiInsight as { literature?: LiteraturePayload } | null)
+    ?.literature;
+  const literatureBuckets = [
+    ...(literature?.markers || []),
+    ...(literature?.phenotypes || []),
+    ...(literature?.combined ? [literature.combined] : []),
+  ].filter(Boolean) as LiteratureBucket[];
+
+  const filteredLiteratureBuckets = literatureBuckets.filter((bucket) => {
+    if (literatureTierFilter !== "all" && bucket.tier !== literatureTierFilter) {
+      return false;
+    }
+    if (!fullTextOnly) return true;
+    return bucket.papers.some((paper) => paper.fullTextAvailable);
+  });
+  const selectedPhenotypeLabel = selectedNodeId
+    ? treeData?.phenotypes?.find((phenotype) => phenotype.population === selectedNodeId)
+        ?.label
+    : null;
+  const phenotypeLiterature = selectedPhenotypeLabel
+    ? literature?.phenotypes?.find((bucket) => bucket.label === selectedPhenotypeLabel)
+    : null;
+  const phenotypeHasFullText = Boolean(
+    phenotypeLiterature?.papers?.some((paper) => paper.fullTextAvailable),
+  );
+
   const handleAnalyze = async () => {
     if (!selectedFiles || selectedFiles.length === 0) {
       setError("Please select at least one FCS file");
@@ -430,12 +511,6 @@ function App() {
     setAiError(null);
     setAiInsight(null);
     setAiCitations([]);
-    setAiJokes([]);
-    setAiFacts([]);
-    setAiTrivia([]);
-    setJoke("Warming up fun facts...");
-    setJokeIndex(0);
-    void fetchEngagementLines();
 
     try {
       // Convert files to base64
@@ -512,42 +587,10 @@ function App() {
         window.clearInterval(progressTimerRef.current);
         progressTimerRef.current = null;
       }
-      if (jokeTimerRef.current) {
-        window.clearInterval(jokeTimerRef.current);
-        jokeTimerRef.current = null;
-      }
       setAnalyzing(false);
     }
   };
 
-  useEffect(() => {
-    if (
-      !analyzing ||
-      (aiJokes.length === 0 && aiFacts.length === 0 && aiTrivia.length === 0)
-    )
-      return;
-    // Combine all content into one cycling pool
-    const allContent = [...aiJokes, ...aiFacts, ...aiTrivia];
-    setJoke(allContent[0]);
-    setJokeIndex(0);
-    if (jokeTimerRef.current) {
-      window.clearInterval(jokeTimerRef.current);
-    }
-    jokeTimerRef.current = window.setInterval(() => {
-      setJokeIndex((prev) => {
-        const next = (prev + 1) % allContent.length;
-        setJoke(allContent[next]);
-        return next;
-      });
-    }, 3600);
-
-    return () => {
-      if (jokeTimerRef.current) {
-        window.clearInterval(jokeTimerRef.current);
-        jokeTimerRef.current = null;
-      }
-    };
-  }, [analyzing, aiJokes, aiFacts, aiTrivia]);
 
   useEffect(() => {
     if (!analyzing) {
@@ -704,7 +747,6 @@ function App() {
                 aria-valuemax={100}
                 aria-label="Analysis progress"
               >
-                <p className="joke">{joke}</p>
                 <div className="progress-bar">
                   <div className="progress-fill" />
                 </div>
@@ -908,6 +950,119 @@ function App() {
                   )}
               </section>
 
+              {aiInsight && literature && (
+                <section
+                  className="card"
+                  role="region"
+                  aria-labelledby="literature-explorer-heading"
+                >
+                  <div className="card-header">
+                    <h2 id="literature-explorer-heading">Literature Explorer</h2>
+                    <span className="card-tag">
+                      {literatureBuckets.length} groups
+                    </span>
+                  </div>
+                  <div
+                    className="ai-toolbar"
+                    style={{
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: "12px",
+                      marginBottom: "16px",
+                    }}
+                  >
+                    <label style={{ display: "flex", gap: "8px" }}>
+                      <span className="muted">Tier</span>
+                      <select
+                        className="ai-select"
+                        value={literatureTierFilter}
+                        onChange={(event) =>
+                          setLiteratureTierFilter(
+                            event.target.value as
+                              | "all"
+                              | "marker"
+                              | "phenotype"
+                              | "combined",
+                          )
+                        }
+                      >
+                        <option value="all">All</option>
+                        <option value="marker">Marker</option>
+                        <option value="phenotype">Phenotype</option>
+                        <option value="combined">Combined</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", gap: "8px" }}>
+                      <input
+                        type="checkbox"
+                        checked={fullTextOnly}
+                        onChange={(event) => setFullTextOnly(event.target.checked)}
+                      />
+                      <span className="muted">Full text only</span>
+                    </label>
+                  </div>
+                  {filteredLiteratureBuckets.length === 0 && (
+                    <p className="muted">No literature groups match filters.</p>
+                  )}
+                  {filteredLiteratureBuckets.map((bucket, idx) => {
+                    const papers = fullTextOnly
+                      ? bucket.papers.filter((paper) => paper.fullTextAvailable)
+                      : bucket.papers;
+                    const provenance =
+                      bucket.tier === "marker"
+                        ? `Matched on marker: ${bucket.label}`
+                        : bucket.tier === "phenotype"
+                          ? `Matched on phenotype: ${bucket.label}`
+                          : "Matched on combined markers";
+                    return (
+                      <section
+                        key={`${bucket.tier}-${bucket.label}-${idx}`}
+                        style={{ marginBottom: "18px" }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            flexWrap: "wrap",
+                            gap: "12px",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          <div>
+                            <h3 style={{ marginBottom: "4px" }}>
+                              {bucket.label}
+                            </h3>
+                            <p className="muted" style={{ margin: 0 }}>
+                              {bucket.tier.toUpperCase()} query: {bucket.query}
+                            </p>
+                          </div>
+                          <span className="card-tag">
+                            {papers.length} papers
+                          </span>
+                        </div>
+                        {papers.length === 0 && (
+                          <p className="muted">No papers available.</p>
+                        )}
+                        <div
+                          className="literature-grid"
+                        >
+                          {papers
+                            .slice(0, 6)
+                            .map((paper, paperIndex) =>
+                              renderLiteraturePaper(paper, paperIndex, provenance),
+                            )}
+                        </div>
+                        {papers.length > 6 && (
+                          <p className="muted" style={{ marginTop: "8px" }}>
+                            +{papers.length - 6} more papers available.
+                          </p>
+                        )}
+                      </section>
+                    );
+                  })}
+                </section>
+              )}
+
               {treeData.phenotypes && treeData.phenotypes.length > 0 && (
                 <section
                   className="card"
@@ -1034,7 +1189,14 @@ function App() {
             >
               ×
             </button>
-            <h2>Population {selectedNodeId} Analysis</h2>
+            <div className="modal-header">
+              <h2>Population {selectedNodeId} Analysis</h2>
+              {phenotypeHasFullText && (
+                <span className="card-tag badge-fulltext">
+                  Full Text Available
+                </span>
+              )}
+            </div>
             {granularLoading && (
               <p style={{ color: "var(--muted)" }}>Analyzing phenotype...</p>
             )}
@@ -1081,6 +1243,33 @@ function App() {
                       </ul>
                     </section>
                   )}
+                {phenotypeLiterature && phenotypeLiterature.papers.length > 0 && (
+                  <section style={{ marginBottom: "16px" }}>
+                    <h3>Phenotype Literature</h3>
+                    <p className="muted" style={{ marginTop: "-4px" }}>
+                      Query: {phenotypeLiterature.query}
+                    </p>
+                    <div
+                      className="literature-grid"
+                    >
+                      {phenotypeLiterature.papers
+                        .slice(0, 4)
+                        .map((paper, paperIndex) =>
+                          renderLiteraturePaper(
+                            paper,
+                            paperIndex,
+                            `Matched on phenotype: ${phenotypeLiterature.label}`,
+                          ),
+                        )}
+                    </div>
+                    {phenotypeLiterature.papers.length > 4 && (
+                      <p className="muted" style={{ marginTop: "8px" }}>
+                        +{phenotypeLiterature.papers.length - 4} more papers in
+                        Literature Explorer.
+                      </p>
+                    )}
+                  </section>
+                )}
               </div>
             )}
           </div>
