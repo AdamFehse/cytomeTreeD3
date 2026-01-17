@@ -727,7 +727,7 @@ function App() {
             aria-labelledby="session-notes-heading"
           >
             <h3 id="session-notes-heading">Session Notes</h3>
-            <p className="muted">Hellow World </p>
+            {/*<p className="muted"> </p>*/}
             <div className="stat-row">
               <div>
                 <span>Threshold</span>
