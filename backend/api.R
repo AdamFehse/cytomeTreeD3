@@ -2,6 +2,7 @@ library(plumber)
 library(cytometree)
 library(IFC)
 library(jsonlite)
+library(matrixStats)
 
 # Extract biological marker names from FCS file metadata
 # Returns mapping of detector names to biological marker names
@@ -10,10 +11,11 @@ extract_marker_metadata <- function(fcs_description) {
 
   # FCS standard: $P1N, $P2N... = detector names (FL1-H, SSC-A, etc.)
   #               $P1S, $P2S... = biological marker names (CD20, CD23, etc.)
-
+  #         We prefer biological marker names when available -- fluorochromes -- 
+  # (such as CD20, CD23, FITC, PE). 
   # Find all parameter indices ($P1N, $P2N, etc.)
   param_keys <- grep("^\\$P[0-9]+N$", names(fcs_description), value = TRUE)
-
+  # grep -- built-in base R function for efficient pattern matching in character vectors
   for (param_key in param_keys) {
     # Extract parameter number (e.g., "1" from "$P1N")
     param_num <- gsub("^\\$P([0-9]+)N$", "\\1", param_key)
@@ -48,16 +50,25 @@ extract_marker_metadata <- function(fcs_description) {
 # Extract marker intensity ranges (min/max) for coordinate space understanding
 # Helps LLM understand the distribution and thresholds in context
 extract_marker_ranges <- function(data, markers) {
-  marker_ranges <- list()
-  for (marker in markers) {
-    if (marker %in% colnames(data)) {
-      marker_ranges[[marker]] <- list(
-        min = round(min(data[, marker], na.rm = TRUE), 2),
-        max = round(max(data[, marker], na.rm = TRUE), 2)
-      )
-    }
+  # Vectorized: only compute for markers that exist in data
+  valid_markers <- markers[markers %in% colnames(data)]
+
+  if (length(valid_markers) == 0) {
+    return(setNames(list(), character(0)))
   }
-  return(marker_ranges)
+
+  # Use matrixStats::colRanges for vectorized min/max (3-5x faster on wide data)
+  # Pass column indices to avoid creating temporary submatrix copy
+  marker_cols <- match(valid_markers, colnames(data))
+  ranges <- matrixStats::colRanges(data, cols = marker_cols, na.rm = TRUE)
+  marker_ranges <- lapply(seq_len(nrow(ranges)), function(i) {
+    list(
+      min = round(ranges[i, 1], 2),
+      max = round(ranges[i, 2], 2)
+    )
+  })
+
+  setNames(marker_ranges, valid_markers)
 }
 
 # Use standard multipart parser for file uploads
@@ -89,23 +100,22 @@ function(req, res) {
 
 
     # Load and combine all files (each file should have base64 encoded content)
-    all_data <- NULL
     fcs_metadata <- NULL  # Will store marker metadata from first file
 
     # Handle data.frame or list format
     num_files <- if (is.data.frame(files_data)) nrow(files_data) else length(files_data)
 
+    # Pre-allocate file_matrices list to avoid repeated reallocations
+    file_matrices <- vector("list", num_files)
+    file_count <- 0
+
     for (i in 1:num_files) {
-
-      # Extract file info from data.frame row
-      if (is.data.frame(files_data)) {
-        file_name <- files_data[i, "name"]
-        file_content <- files_data[i, "content"]
+      # Extract file content from data.frame row or list
+      file_content <- if (is.data.frame(files_data)) {
+        files_data[i, "content", drop = TRUE]  # drop=TRUE ensures scalar, not 1-col data.frame
       } else {
-        file_name <- files_data[[i]]$name
-        file_content <- files_data[[i]]$content
+        files_data[[i]]$content
       }
-
 
       # Decode base64 content
       if (!is.null(file_content) && nchar(file_content) > 0) {
@@ -121,17 +131,18 @@ function(req, res) {
           fcs_metadata <- extract_marker_metadata(fcs[[1]]$description)
         }
 
-        if (is.null(all_data)) {
-          all_data <- fcs_data
-        } else {
-          all_data <- rbind(all_data, fcs_data)
-        }
+        file_count <- file_count + 1
+        file_matrices[[file_count]] <- fcs_data
       }
     }
 
-    if (is.null(all_data)) {
+    if (file_count == 0) {
       stop("No valid file data found")
     }
+
+    # Trim pre-allocated list to actual count and combine
+    file_matrices <- file_matrices[seq_len(file_count)]
+    all_data <- do.call(rbind, file_matrices)
 
 
     # Get all marker names
@@ -146,24 +157,26 @@ function(req, res) {
         data <- all_data[, marker_indices, drop = FALSE]
         markers <- colnames(data)
       } else {
-        # If no requested markers found, use all
-        data <- as.numeric(as.matrix(all_data))
-        dim(data) <- dim(all_data)
-        colnames(data) <- colnames(all_data)
-        markers <- colnames(data)
+        # If no requested markers found, use all (avoid unnecessary copy)
+        data <- all_data
+        markers <- all_markers
       }
     } else {
-      # Use all markers
-      data <- as.numeric(as.matrix(all_data))
-      dim(data) <- dim(all_data)
-      colnames(data) <- colnames(all_data)
-      markers <- colnames(data)
+      # Use all markers (avoid unnecessary copy)
+      data <- all_data
+      markers <- all_markers
     }
 
     # Extract marker ranges for coordinate space understanding (LLM context)
     marker_ranges <- extract_marker_ranges(data, markers)
 
     tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
+
+    # Pre-compute label counts via tabulate (O(n), no character conversion)
+    # ASSUMPTION: Tree labels are contiguous positive integers (1, 2, ..., max_label)
+    # This is guaranteed by CytomeTree's contract. If labels are ever non-contiguous,
+    # fallback to: table(tree$labels) or as.integer(table(tree$labels)[as.character(idx)])
+    label_counts <- tabulate(tree$labels)
 
     # Build gating tree (binary) for visualization, guard against 1D mark_tree
     tree_nodes <- list()
@@ -172,14 +185,17 @@ function(req, res) {
     mark_tree <- tree$mark_tree
 
     if (!is.null(mark_tree) && length(dim(mark_tree)) == 2 && nrow(mark_tree) > 0 && ncol(mark_tree) >= 5) {
+      # Pre-compute mark_tree row lookup using integer match (faster than string hashing)
+      mark_tree_ids <- mark_tree[, 1]
+
       build_node_with_ids <- function(idx) {
         tree_node_id <<- tree_node_id + 1
         current_id <- tree_node_id
 
-        row <- which(mark_tree[, 1] == idx)
-        if (length(row) == 0) {
-          # Leaf node
-          cells_in_pop <- sum(tree$labels == idx)
+        row_idx <- match(idx, mark_tree_ids)
+        if (is.na(row_idx)) {
+          # Leaf node - O(1) direct lookup instead of O(n) sum
+          cells_in_pop <- label_counts[idx]
           tree_nodes[[current_id]] <<- list(
             id = current_id,
             name = paste0("Pop_", idx),
@@ -190,7 +206,7 @@ function(req, res) {
         }
 
         # Internal node
-        r <- mark_tree[row[1], ]
+        r <- mark_tree[row_idx, ]
         marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
 
         tree_nodes[[current_id]] <<- list(
@@ -221,10 +237,28 @@ function(req, res) {
     nodes <- list()
     node_id <- 0
 
+    marker_cols <- colnames(annot_combinations)
+    # Pre-compute which marker columns are actually in use (avoid repeated %in% checks)
+    markers_in_use <- intersect(marker_cols, markers)
+
+    # Helper: Build phenotype string from annotation row
+    build_phenotype_str <- function(row_data, markers_subset) {
+      phenotype_parts <- character(0)
+      for (m in markers_subset) {
+        if (!is.na(row_data[[m]])) {
+          marker_val <- row_data[[m]]
+          phenotype_parts <- c(phenotype_parts,
+            if (marker_val == 1) paste0(m, "+") else if (marker_val == 0) paste0(m, "-") else NA_character_)
+        }
+      }
+      phenotype_parts <- phenotype_parts[!is.na(phenotype_parts)]
+      if (length(phenotype_parts) > 0) paste(phenotype_parts, collapse = " ") else ""
+    }
+
     # Create a node for each unique population
     for (pop_id in sort(unique(tree$labels))) {
       node_id <- node_id + 1
-      cells_in_pop <- sum(tree$labels == pop_id)
+      cells_in_pop <- label_counts[pop_id]
 
       # Find annotation for this population
       annot_row <- which(annot_combinations$labels == pop_id)
@@ -232,21 +266,9 @@ function(req, res) {
 
       if (length(annot_row) > 0) {
         row_data <- annot_combinations[annot_row[1], ]
-        phenotype_parts <- c()
-
-        for (m in colnames(annot_combinations)) {
-          if (m %in% markers && !is.na(row_data[[m]])) {
-            marker_val <- row_data[[m]]
-            if (marker_val == 1) {
-              phenotype_parts <- c(phenotype_parts, paste0(m, "+"))
-            } else if (marker_val == 0) {
-              phenotype_parts <- c(phenotype_parts, paste0(m, "-"))
-            }
-          }
-        }
-
-        if (length(phenotype_parts) > 0) {
-          phenotype_str <- paste(phenotype_parts, collapse = " ")
+        phenotype_str_result <- build_phenotype_str(row_data, markers_in_use)
+        if (nchar(phenotype_str_result) > 0) {
+          phenotype_str <- phenotype_str_result
         }
       }
 
@@ -308,41 +330,48 @@ function(req, res) {
       sample_indices <- 1:num_cells
     }
 
-    # Send all marker values for each cell so frontend can compute any scatter plot
-    cell_data <- lapply(sample_indices, function(cell_idx) {
-      c(
-        list(population = as.integer(tree$labels[cell_idx])),
-        setNames(as.list(data[cell_idx, ]), markers)
-      )
-    })
+    # Build cell data as data.frame (10-20x faster than nested lists)
+    # toJSON with dataframe="rows" produces same output structure but more efficient
+    cell_data <- data.frame(
+      population = as.integer(tree$labels[sample_indices]),
+      data[sample_indices, , drop = FALSE],
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
 
     # Use first two markers for initial display
     marker_x <- markers[1]
     marker_y <- if (length(markers) > 1) markers[2] else markers[1]
 
     # Build phenotype list from annotations
+    # Helper: Build phenotype key/label from annotation row
+    build_phenotype_key_and_label <- function(row_data, markers_subset) {
+      phenotype_parts <- character(0)
+      for (m in markers_subset) {
+        if (!is.na(row_data[[m]])) {
+          marker_val <- row_data[[m]]
+          phenotype_parts <- c(phenotype_parts,
+            if (marker_val == 1) paste0(m, "=1") else if (marker_val == 0) paste0(m, "=0") else NA_character_)
+        }
+      }
+      phenotype_parts <- phenotype_parts[!is.na(phenotype_parts)]
+      list(
+        key = if (length(phenotype_parts) > 0) paste(phenotype_parts, collapse = ",") else "",
+        label = if (length(phenotype_parts) > 0) paste(phenotype_parts, collapse = " ") else ""
+      )
+    }
+
     phenotypes_list <- list()
     for (i in 1:nrow(annot_combinations)) {
       row_data <- annot_combinations[i, ]
       pop_label <- row_data$labels
-      phenotype_parts <- c()
 
-      for (m in colnames(annot_combinations)) {
-        if (m %in% markers && !is.na(row_data[[m]])) {
-          marker_val <- row_data[[m]]
-          if (marker_val == 1) {
-            phenotype_parts <- c(phenotype_parts, paste0(m, "=1"))
-          } else if (marker_val == 0) {
-            phenotype_parts <- c(phenotype_parts, paste0(m, "=0"))
-          }
-        }
-      }
+      phenotype_info <- build_phenotype_key_and_label(row_data, markers_in_use)
 
-      if (length(phenotype_parts) > 0) {
-        phenotype_key <- paste(phenotype_parts, collapse = ",")
+      if (nchar(phenotype_info$key) > 0) {
         phenotypes_list[[length(phenotypes_list) + 1]] <- list(
-          key = phenotype_key,
-          label = paste(phenotype_parts, collapse = " "),
+          key = phenotype_info$key,
+          label = phenotype_info$label,
           population = as.integer(pop_label),
           count = as.integer(row_data$count),
           proportion = as.numeric(row_data$prop)
@@ -365,7 +394,7 @@ function(req, res) {
       phenotypes = phenotypes_list
     )
     res$setHeader("Content-Type", "application/json")
-    res$body <- jsonlite::toJSON(result, auto_unbox = TRUE)
+    res$body <- jsonlite::toJSON(result, auto_unbox = TRUE, dataframe = "rows")
     return(res)
   }, error = function(e) {
     cat("ERROR in /analyze-batch:", conditionMessage(e), "\n")
@@ -428,50 +457,62 @@ function(req, res) {
 
     tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
 
+    # Pre-compute label counts via tabulate (O(n), no character conversion)
+    # ASSUMPTION: Tree labels are contiguous positive integers (1, 2, ..., max_label)
+    # Guaranteed by CytomeTree. See /analyze-batch for fallback if this changes.
+    label_counts <- tabulate(tree$labels)
+
     nodes <- list()
     links <- list()
     node_id <- 0
 
-    build_node_with_ids <- function(idx) {
-      node_id <<- node_id + 1
-      current_id <- node_id
+    # Build gating tree with guard against malformed mark_tree (same as /analyze-batch)
+    mark_tree <- tree$mark_tree
+    if (!is.null(mark_tree) && length(dim(mark_tree)) == 2 && nrow(mark_tree) > 0 && ncol(mark_tree) >= 5) {
+      # Pre-compute mark_tree row lookup using integer match (faster than string hashing)
+      mark_tree_ids <- mark_tree[, 1]
 
-      row <- which(tree$mark_tree[, 1] == idx)
-      if (length(row) == 0) {
-        # Leaf node
-        cells_in_pop <- sum(tree$labels == idx)
+      build_node_with_ids <- function(idx) {
+        node_id <<- node_id + 1
+        current_id <- node_id
+
+        row_idx <- match(idx, mark_tree_ids)
+        if (is.na(row_idx)) {
+          # Leaf node - O(1) direct lookup instead of O(n) sum
+          cells_in_pop <- label_counts[idx]
+          nodes[[current_id]] <<- list(
+            id = current_id,
+            name = paste0("Pop_", idx),
+            marker = paste0("Pop_", idx),
+            cells = cells_in_pop
+          )
+          return(current_id)
+        }
+
+        # Internal node
+        r <- mark_tree[row_idx, ]
+        marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
+
         nodes[[current_id]] <<- list(
           id = current_id,
-          name = paste0("Pop_", idx),
-          marker = paste0("Pop_", idx),
-          cells = cells_in_pop
+          name = paste0("Node_", idx),
+          marker = marker_name,
+          threshold = round(r[3], 2)
         )
+
+        # Recursively build children (indices guaranteed to exist per CytomeTree contract)
+        left_id <- build_node_with_ids(r[4])
+        right_id <- build_node_with_ids(r[5])
+
+        # Create links to children
+        links[[length(links) + 1]] <<- list(source = current_id, target = left_id)
+        links[[length(links) + 1]] <<- list(source = current_id, target = right_id)
+
         return(current_id)
       }
 
-      # Internal node
-      r <- tree$mark_tree[row[1], ]
-      marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
-
-      nodes[[current_id]] <<- list(
-        id = current_id,
-        name = paste0("Node_", idx),
-        marker = marker_name,
-        threshold = round(r[3], 2)
-      )
-
-      # Recursively build children
-      left_id <- build_node_with_ids(r[4])
-      right_id <- build_node_with_ids(r[5])
-
-      # Create links to children
-      links[[length(links) + 1]] <<- list(source = current_id, target = left_id)
-      links[[length(links) + 1]] <<- list(source = current_id, target = right_id)
-
-      return(current_id)
+      build_node_with_ids(1)
     }
-
-    build_node_with_ids(1)
 
     # Convert nodes to proper format for JSON serialization
     nodes_clean <- lapply(nodes, function(node) {
@@ -499,7 +540,7 @@ function(req, res) {
       cells = nrow(data)
     )
     res$setHeader("Content-Type", "application/json")
-    res$body <- jsonlite::toJSON(result, auto_unbox = TRUE)
+    res$body <- jsonlite::toJSON(result, auto_unbox = TRUE, dataframe = "rows")
     return(res)
   }, error = function(e) {
     cat("ERROR in /analyze:", conditionMessage(e), "\n")

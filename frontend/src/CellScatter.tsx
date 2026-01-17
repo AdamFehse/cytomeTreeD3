@@ -34,8 +34,28 @@ export default function CellScatter({
   const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [useMode, setUseMode] = useState<'marker' | 'phenotype_criteria'>('marker')
-  const [xMarkerCriteria, setXMarkerCriteria] = useState<{ marker: string; value: 0 | 1 }>({ marker: markers[0], value: 1 })
-  const [yMarkerCriteria, setYMarkerCriteria] = useState<{ marker: string; value: 0 | 1 }>({ marker: markers[1] || markers[0], value: 1 })
+  const [xMarkerCriteria, setXMarkerCriteria] = useState<{ marker: string; value: 0 | 1 }>({
+    marker: '',
+    value: 1
+  })
+  const [yMarkerCriteria, setYMarkerCriteria] = useState<{ marker: string; value: 0 | 1 }>({
+    marker: '',
+    value: 1
+  })
+
+  // Initialize criteria when markers are available
+  useEffect(() => {
+    if (markers && markers.length > 0) {
+      setXMarkerCriteria(prev => ({
+        marker: markers.includes(prev.marker) ? prev.marker : (markers[0] || ''),
+        value: prev.value
+      }))
+      setYMarkerCriteria(prev => ({
+        marker: markers.includes(prev.marker) ? prev.marker : (markers[1] || markers[0] || ''),
+        value: prev.value
+      }))
+    }
+  }, [markers])
 
   useEffect(() => {
     if (!svgRef.current || !cellData || cellData.length === 0) return
@@ -260,17 +280,18 @@ export default function CellScatter({
               </select>
             </label>
           </>
-        ) : (
+        ) : markers && markers.length > 0 ? (
           <>
             <div style={{ marginBottom: '10px' }}>
               <label style={{ marginRight: '20px' }}>
                 X Axis Marker:
                 <select
-                  value={xMarkerCriteria.marker}
+                  value={xMarkerCriteria.marker || ''}
                   onChange={(e) => setXMarkerCriteria({ ...xMarkerCriteria, marker: e.target.value })}
                   style={{ marginLeft: '8px', padding: '4px' }}
                   aria-label="Select X-axis marker for phenotype criteria"
                 >
+                  <option value="">Select marker</option>
                   {markers.map((m) => (
                     <option key={m} value={m}>
                       {m}
@@ -281,13 +302,13 @@ export default function CellScatter({
               <label>
                 Value:
                 <select
-                  value={xMarkerCriteria.value}
+                  value={xMarkerCriteria.value.toString()}
                   onChange={(e) => setXMarkerCriteria({ ...xMarkerCriteria, value: parseInt(e.target.value) as 0 | 1 })}
                   style={{ marginLeft: '8px', padding: '4px' }}
                   aria-label="Select X-axis value for phenotype criteria"
                 >
-                  <option value={0}>0 (Negative)</option>
-                  <option value={1}>1 (Positive)</option>
+                  <option value="0">0 (Negative)</option>
+                  <option value="1">1 (Positive)</option>
                 </select>
               </label>
             </div>
@@ -295,11 +316,12 @@ export default function CellScatter({
               <label style={{ marginRight: '20px' }}>
                 Y Axis Marker:
                 <select
-                  value={yMarkerCriteria.marker}
+                  value={yMarkerCriteria.marker || ''}
                   onChange={(e) => setYMarkerCriteria({ ...yMarkerCriteria, marker: e.target.value })}
                   style={{ marginLeft: '8px', padding: '4px' }}
                   aria-label="Select Y-axis marker for phenotype criteria"
                 >
+                  <option value="">Select marker</option>
                   {markers.map((m) => (
                     <option key={m} value={m}>
                       {m}
@@ -310,17 +332,21 @@ export default function CellScatter({
               <label>
                 Value:
                 <select
-                  value={yMarkerCriteria.value}
+                  value={yMarkerCriteria.value.toString()}
                   onChange={(e) => setYMarkerCriteria({ ...yMarkerCriteria, value: parseInt(e.target.value) as 0 | 1 })}
                   style={{ marginLeft: '8px', padding: '4px' }}
                   aria-label="Select Y-axis value for phenotype criteria"
                 >
-                  <option value={0}>0 (Negative)</option>
-                  <option value={1}>1 (Positive)</option>
+                  <option value="0">0 (Negative)</option>
+                  <option value="1">1 (Positive)</option>
                 </select>
               </label>
             </div>
           </>
+        ) : (
+          <div style={{ padding: '10px', color: '#666' }}>
+            <em>Load data to enable phenotype criteria mode</em>
+          </div>
         )}
       </div>
       <svg

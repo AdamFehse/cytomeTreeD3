@@ -1,6 +1,6 @@
 FROM rocker/r2u:24.04
 
-RUN install.r plumber cytometree IFC webutils
+RUN install.r plumber cytometree IFC webutils matrixStats
 
 WORKDIR /app
 
