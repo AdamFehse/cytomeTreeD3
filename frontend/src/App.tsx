@@ -170,15 +170,6 @@ function App() {
       if (analysisMode) requestBody.analysisMode = analysisMode;
       if (nodeId !== undefined) requestBody.nodeId = nodeId;
 
-      // Log what we're sending
-      console.log("=== AI Insights Request ===");
-      console.log("Model:", model);
-      console.log("Analysis Mode:", analysisMode);
-      console.log("Request Body Keys:", Object.keys(requestBody));
-      console.log("Text/Prompt length:", prompt.length, "characters");
-      console.log("Full request body:", requestBody);
-      console.log("Stringified request size:", JSON.stringify(requestBody).length, "bytes");
-
       const requestStr = JSON.stringify(requestBody);
       const response = await fetch(DEFAULT_WORKER, {
         method: "POST",
@@ -193,13 +184,9 @@ function App() {
       }
 
       const text = await response.text();
-      console.log("=== AI Response ===");
-      console.log("Response size:", text.length, "characters");
-      console.log("Response preview:", text.substring(0, 300));
 
       try {
         const parsed = JSON.parse(text);
-        console.log("Parsed response keys:", Object.keys(parsed));
         return parsed;
       } catch (e) {
         console.error(
@@ -276,12 +263,6 @@ function App() {
       phenotypes: data.phenotypes ? data.phenotypes.slice(0, 80) : [],
     };
 
-    console.log("=== Built AI Payload ===");
-    console.log("Summary:", payload.summary);
-    console.log("Phenotypes count:", payload.phenotypes.length);
-    console.log("Phenotypes sample:", payload.phenotypes.slice(0, 3));
-    console.log("Full payload size:", JSON.stringify(payload).length, "bytes");
-
     return payload;
   };
 
@@ -289,22 +270,18 @@ function App() {
     if (aiModels.length === 0 || !aiModel) {
       return;
     }
-    console.log("Starting AI Insights generation for model:", aiModel);
     setAiLoading(true);
     setAiError(null);
     setAiInsight(null);
     setAiCitations([]);
     try {
       const payload = buildAiPayload(data);
-      console.log("Calling AI worker with payload...");
       const result = await callWorker(
         JSON.stringify(payload),
         aiModel,
       );
-      console.log("AI Insights result received:", result);
       setAiInsight(result);
       if (result.citations && Array.isArray(result.citations)) {
-        console.log("Found", result.citations.length, "citations");
         setAiCitations(result.citations);
       }
     } catch (err) {
