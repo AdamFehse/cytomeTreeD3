@@ -71,6 +71,93 @@ extract_marker_ranges <- function(data, markers) {
   setNames(marker_ranges, valid_markers)
 }
 
+# Build a binary tree from CytomeTree's level-ordered mark_tree list.
+# CytomeTree returns a list of levels with node labels in left-to-right order.
+build_tree_from_mark_tree_levels <- function(mark_tree_levels, label_counts) {
+  tree_nodes <- list()
+  tree_links <- list()
+  tree_node_id <- 0
+
+  is_leaf_label <- function(label) {
+    grepl("^[0-9]+$", label)
+  }
+
+  marker_from_label <- function(label) {
+    sub("\\.[0-9]+$", "", label)
+  }
+
+  create_node <- function(label) {
+    tree_node_id <<- tree_node_id + 1
+    current_id <- tree_node_id
+
+    label_chr <- as.character(label)[1]
+    if (is_leaf_label(label_chr)) {
+      pop_id <- as.integer(label_chr)
+      cells_in_pop <- if (!is.na(pop_id) && pop_id <= length(label_counts)) label_counts[pop_id] else NA_integer_
+      tree_nodes[[current_id]] <<- list(
+        id = current_id,
+        name = paste0("Pop_", pop_id),
+        marker = paste0("Pop_", pop_id),
+        cells = cells_in_pop
+      )
+      list(id = current_id, is_internal = FALSE)
+    } else {
+      marker_label <- marker_from_label(label_chr)
+      tree_nodes[[current_id]] <<- list(
+        id = current_id,
+        name = label_chr,
+        marker = marker_label
+      )
+      list(id = current_id, is_internal = TRUE)
+    }
+  }
+
+  if (length(mark_tree_levels) == 0) {
+    return(list(nodes = tree_nodes, links = tree_links))
+  }
+
+  level_nodes <- as.character(unlist(mark_tree_levels[[1]], use.names = FALSE))
+  current_internal_ids <- integer(0)
+  for (label in level_nodes) {
+    node_info <- create_node(label)
+    if (node_info$is_internal) {
+      current_internal_ids <- c(current_internal_ids, node_info$id)
+    }
+  }
+
+  if (length(current_internal_ids) == 0) {
+    return(list(nodes = tree_nodes, links = tree_links))
+  }
+
+  for (level_idx in 2:length(mark_tree_levels)) {
+    next_labels <- as.character(unlist(mark_tree_levels[[level_idx]], use.names = FALSE))
+    if (length(next_labels) == 0) break
+
+    next_internal_ids <- integer(0)
+    next_index <- 1
+
+    for (parent_id in current_internal_ids) {
+      for (child_pos in 1:2) {
+        if (next_index > length(next_labels)) break
+        label <- next_labels[next_index]
+        next_index <- next_index + 1
+
+        node_info <- create_node(label)
+        tree_links[[length(tree_links) + 1]] <- list(source = parent_id, target = node_info$id)
+
+        if (node_info$is_internal) {
+          next_internal_ids <- c(next_internal_ids, node_info$id)
+        }
+      }
+    }
+
+    current_internal_ids <- next_internal_ids
+    if (length(current_internal_ids) == 0) break
+  }
+
+  list(nodes = tree_nodes, links = tree_links)
+}
+
 # Use standard multipart parser for file uploads
 
 #* @filter cors
@@ -85,13 +172,15 @@ function(req, res) {
 #* @get /health
 function() list(status = "ok")
 
-#* @post /analyze-batch
+#* @post /analyze
 #* @parser json
 function(req, res) {
   tryCatch({
     body <- req$body
 
-    t <- body$t %||% 0.1
+    # Threshold for CytomeTree splitting (lower = more granular tree, deeper hierarchy)
+    # Default 0.01 creates deeper binary tree. Can override via API: ?t=0.005 for even more splitting
+    t <- body$t %||% 0.01
     files_data <- body$files
 
     if (is.null(files_data) || length(files_data) == 0) {
@@ -172,10 +261,10 @@ function(req, res) {
 
     tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
 
+    # Debug: check all available tree fields
+    cat("DEBUG: CytomeTree object fields:", paste(names(tree), collapse=", "), "\n")
+
     # Pre-compute label counts via tabulate (O(n), no character conversion)
-    # ASSUMPTION: Tree labels are contiguous positive integers (1, 2, ..., max_label)
-    # This is guaranteed by CytomeTree's contract. If labels are ever non-contiguous,
-    # fallback to: table(tree$labels) or as.integer(table(tree$labels)[as.character(idx)])
     label_counts <- tabulate(tree$labels)
 
     # Build gating tree (binary) for visualization, guard against 1D mark_tree
@@ -184,7 +273,17 @@ function(req, res) {
     tree_node_id <- 0
     mark_tree <- tree$mark_tree
 
-    if (!is.null(mark_tree) && length(dim(mark_tree)) == 2 && nrow(mark_tree) > 0 && ncol(mark_tree) >= 5) {
+    # Convert mark_tree to matrix if it's not already
+    if (!is.null(mark_tree) && !is.matrix(mark_tree) && length(mark_tree) > 0) {
+      # Try to convert to matrix (reshape if needed)
+      mark_tree <- as.matrix(mark_tree)
+      if (nrow(mark_tree) == 1 && ncol(mark_tree) > 5) {
+        # If it's a single row, transpose it to check if it's actually multi-row data
+        mark_tree <- t(matrix(mark_tree, ncol = 5))
+      }
+    }
+
+    if (!is.null(mark_tree) && is.matrix(mark_tree) && nrow(mark_tree) > 0 && ncol(mark_tree) >= 5) {
       # Pre-compute mark_tree row lookup using integer match (faster than string hashing)
       mark_tree_ids <- mark_tree[, 1]
 
@@ -228,6 +327,93 @@ function(req, res) {
       }
 
       build_node_with_ids(1)
+    }
+
+    # Fallback: if mark_tree is a list instead of matrix, parse it recursively
+    if (length(tree_nodes) == 0 && is.list(mark_tree) && length(mark_tree) > 0) {
+      mark_tree_names <- names(mark_tree)
+      if (!is.null(mark_tree_names) && length(mark_tree_names) > 0) {
+        node_name_to_id <- new.env(parent = emptyenv())
+        visited <- new.env(parent = emptyenv())
+
+        parse_mark_tree_entry <- function(entry) {
+          marker_val <- NULL
+          threshold_val <- NULL
+
+          if (!is.null(entry)) {
+            if (is.list(entry)) {
+              if (!is.null(entry$marker)) marker_val <- entry$marker
+              if (is.null(marker_val) && !is.null(entry$variable)) marker_val <- entry$variable
+              if (is.null(marker_val) && length(entry) > 0) marker_val <- entry[[1]]
+              if (!is.null(entry$cut)) threshold_val <- entry$cut
+              if (is.null(threshold_val) && !is.null(entry$threshold)) threshold_val <- entry$threshold
+            } else {
+              marker_val <- entry
+            }
+          }
+
+          if (!is.null(marker_val) && is.numeric(marker_val) && length(marker_val) == 1) {
+            if (marker_val <= length(markers)) marker_val <- markers[marker_val]
+          }
+
+          marker_val <- if (is.null(marker_val)) NULL else as.character(marker_val)[1]
+          threshold_val <- if (is.null(threshold_val)) NULL else round(as.numeric(threshold_val)[1], 2)
+
+          list(marker = marker_val, threshold = threshold_val)
+        }
+
+        build_mark_tree_list <- function(node_name, parent_id = NULL) {
+          if (!is.null(visited[[node_name]])) {
+            return(node_name_to_id[[node_name]])
+          }
+          visited[[node_name]] <- TRUE
+
+          tree_node_id <<- tree_node_id + 1
+          current_id <- tree_node_id
+          node_name_to_id[[node_name]] <- current_id
+
+          entry <- mark_tree[[node_name]]
+          parsed <- parse_mark_tree_entry(entry)
+          marker_label <- if (is.null(parsed$marker)) "root" else parsed$marker
+
+          tree_nodes[[current_id]] <<- list(
+            id = current_id,
+            name = node_name,
+            marker = marker_label,
+            threshold = parsed$threshold
+          )
+
+          if (!is.null(parent_id)) {
+            tree_links[[length(tree_links) + 1]] <<- list(source = parent_id, target = current_id)
+          }
+
+          child_marker <- parsed$marker
+          if (!is.null(child_marker)) {
+            left_candidates <- c(paste0(child_marker, ".0"), paste0(node_name, ".0"))
+            right_candidates <- c(paste0(child_marker, ".1"), paste0(node_name, ".1"))
+
+            left_name <- left_candidates[left_candidates %in% mark_tree_names][1]
+            right_name <- right_candidates[right_candidates %in% mark_tree_names][1]
+
+            if (!is.na(left_name)) build_mark_tree_list(left_name, current_id)
+            if (!is.na(right_name)) build_mark_tree_list(right_name, current_id)
+          }
+
+          return(current_id)
+        }
+
+        root_name <- if ("root" %in% mark_tree_names) "root" else mark_tree_names[1]
+        build_mark_tree_list(root_name)
+      }
+    }
+
+    # Fallback: mark_tree as level-ordered list (even if names were injected)
+    if (length(tree_nodes) <= 1 && is.list(mark_tree) && length(mark_tree) > 0) {
+      tree_from_levels <- build_tree_from_mark_tree_levels(mark_tree, label_counts)
+      if (length(tree_from_levels$nodes) > length(tree_nodes)) {
+        tree_nodes <- tree_from_levels$nodes
+        tree_links <- tree_from_levels$links
+      }
     }
 
     # Get annotation with marker combinations
@@ -387,157 +573,18 @@ function(req, res) {
       populations = length(unique(tree$labels)),
       cells = nrow(data),
       markers = as.list(markers),
-      markerMappings = fcs_metadata %||% list(),  # Add marker metadata (empty if not available)
-      markerRanges = marker_ranges,  # Marker intensity ranges for coordinate space understanding
+      markerMappings = fcs_metadata %||% list(),
+      markerRanges = marker_ranges,
       cellData = cell_data,
       cellDataMarkers = list(x = marker_x, y = marker_y),
-      phenotypes = phenotypes_list
-    )
-    res$setHeader("Content-Type", "application/json")
-    res$body <- jsonlite::toJSON(result, auto_unbox = TRUE, dataframe = "rows")
-    return(res)
-  }, error = function(e) {
-    cat("ERROR in /analyze-batch:", conditionMessage(e), "\n")
-    list(error = conditionMessage(e))
-  })
-}
-
-#* @post /analyze
-#* @parser multi
-function(req, res) {
-  tryCatch({
-    t <- 0.1
-    if (!is.null(req$body$t)) {
-      t_val <- as.numeric(unlist(req$body$t))
-      if (length(t_val) > 0 && !is.na(t_val[1])) {
-        t <- t_val[1]
-      }
-    }
-
-    # Get uploaded files - plumber returns raw file object with value field
-    file_obj <- req$body$files
-
-    if (is.null(file_obj)) {
-      stop("No files provided")
-    }
-
-
-    # Check if there's a parsed field with multiple files
-    if (!is.null(file_obj$parsed)) {
-      if (is.list(file_obj$parsed)) {
-      }
-    }
-
-    # Handle the file object - it has value (raw bytes), filename, content_type, etc
-    filepath <- NULL
-
-    if (!is.null(file_obj$value) && is.raw(file_obj$value)) {
-      # Raw bytes from form data
-      temp_file <- tempfile(fileext = ".fcs")
-      writeBin(file_obj$value, temp_file)
-      filepath <- temp_file
-    } else if (!is.null(file_obj$datapath) && file.exists(file_obj$datapath)) {
-      # Traditional datapath
-      filepath <- file_obj$datapath
-    } else {
-      stop("No valid file content found")
-    }
-
-    fcs <- IFC::readFCS(fileName = filepath)
-    fcs_data <- as.matrix(fcs[[1]]$data)
-    all_data <- fcs_data
-
-
-    # Get all marker names
-    all_markers <- colnames(all_data)
-
-    # Use all markers
-    data <- all_data
-    markers <- all_markers
-
-    tree <- CytomeTree(data, t = as.numeric(t), verbose = FALSE)
-
-    # Pre-compute label counts via tabulate (O(n), no character conversion)
-    # ASSUMPTION: Tree labels are contiguous positive integers (1, 2, ..., max_label)
-    # Guaranteed by CytomeTree. See /analyze-batch for fallback if this changes.
-    label_counts <- tabulate(tree$labels)
-
-    nodes <- list()
-    links <- list()
-    node_id <- 0
-
-    # Build gating tree with guard against malformed mark_tree (same as /analyze-batch)
-    mark_tree <- tree$mark_tree
-    if (!is.null(mark_tree) && length(dim(mark_tree)) == 2 && nrow(mark_tree) > 0 && ncol(mark_tree) >= 5) {
-      # Pre-compute mark_tree row lookup using integer match (faster than string hashing)
-      mark_tree_ids <- mark_tree[, 1]
-
-      build_node_with_ids <- function(idx) {
-        node_id <<- node_id + 1
-        current_id <- node_id
-
-        row_idx <- match(idx, mark_tree_ids)
-        if (is.na(row_idx)) {
-          # Leaf node - O(1) direct lookup instead of O(n) sum
-          cells_in_pop <- label_counts[idx]
-          nodes[[current_id]] <<- list(
-            id = current_id,
-            name = paste0("Pop_", idx),
-            marker = paste0("Pop_", idx),
-            cells = cells_in_pop
-          )
-          return(current_id)
-        }
-
-        # Internal node
-        r <- mark_tree[row_idx, ]
-        marker_name <- if (r[2] <= length(markers)) markers[r[2]] else paste0("Marker_", r[2])
-
-        nodes[[current_id]] <<- list(
-          id = current_id,
-          name = paste0("Node_", idx),
-          marker = marker_name,
-          threshold = round(r[3], 2)
-        )
-
-        # Recursively build children (indices guaranteed to exist per CytomeTree contract)
-        left_id <- build_node_with_ids(r[4])
-        right_id <- build_node_with_ids(r[5])
-
-        # Create links to children
-        links[[length(links) + 1]] <<- list(source = current_id, target = left_id)
-        links[[length(links) + 1]] <<- list(source = current_id, target = right_id)
-
-        return(current_id)
-      }
-
-      build_node_with_ids(1)
-    }
-
-    # Convert nodes to proper format for JSON serialization
-    nodes_clean <- lapply(nodes, function(node) {
-      list(
-        id = as.integer(node$id),
-        name = as.character(node$name),
-        marker = as.character(node$marker),
-        cells = if (!is.null(node$cells)) as.integer(node$cells) else NULL,
-        threshold = node$threshold
+      phenotypes = phenotypes_list,
+      debug_info = list(
+        mark_tree_is_null = is.null(tree$mark_tree),
+        mark_tree_class = if (is.null(tree$mark_tree)) "NULL" else class(tree$mark_tree),
+        mark_tree_length = if (is.null(tree$mark_tree)) 0 else length(tree$mark_tree),
+        mark_tree_names = if (is.null(tree$mark_tree)) list() else names(tree$mark_tree),
+        mark_tree_sample = if (is.null(tree$mark_tree)) NULL else as.character(tree$mark_tree[[1]])
       )
-    })
-
-    # Convert links to proper format
-    links_clean <- lapply(links, function(link) {
-      list(
-        source = as.integer(link$source),
-        target = as.integer(link$target)
-      )
-    })
-
-    result <- list(
-      nodes = nodes_clean,
-      links = links_clean,
-      populations = length(unique(tree$labels)),
-      cells = nrow(data)
     )
     res$setHeader("Content-Type", "application/json")
     res$body <- jsonlite::toJSON(result, auto_unbox = TRUE, dataframe = "rows")

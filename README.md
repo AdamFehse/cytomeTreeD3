@@ -2,6 +2,13 @@
 
 # [DEMO HERE](https://adamfehse.github.io/cytomeTreeD3/)
 
+ ## Test Data                                      
+                                                    
+  Download sample FCS files from                    
+  [releases](https://github.com/AdamFehse/cytomeTree
+  D3/releases/download/v1.0.0/):                    
+  - `001.fcs` through `030.fcs` (~6MB total) 
+
 Flow cytometry analysis with automatic gating using the CytomeTree algorithm. Upload FCS files and visualize the binary tree in your browser.
 
 ## Stack

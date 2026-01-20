@@ -97,6 +97,7 @@ function App() {
   const [granularLoading, setGranularLoading] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [showGranularModal, setShowGranularModal] = useState(false);
+  const [granularQuestion, setGranularQuestion] = useState<string>("");
   const [literatureTierFilter, setLiteratureTierFilter] = useState<
     "all" | "marker" | "phenotype" | "combined"
   >("all");
@@ -161,14 +162,16 @@ function App() {
   const callWorker = async (
     prompt: string,
     model?: string,
-    analysisMode?: "comprehensive" | "granular",
+    mode?: "comprehensive" | "granular" | "report",
     nodeId?: number,
+    question?: string,
   ) => {
     try {
       const requestBody: any = { text: prompt, model };
       if (researchContext) requestBody.researchContext = researchContext;
-      if (analysisMode) requestBody.analysisMode = analysisMode;
+      if (mode) requestBody.mode = mode;
       if (nodeId !== undefined) requestBody.nodeId = nodeId;
+      if (question) requestBody.question = question;
 
       const requestStr = JSON.stringify(requestBody);
       const response = await fetch(DEFAULT_WORKER, {
@@ -203,15 +206,22 @@ function App() {
   };
 
   const runGranularAnalysis = async (nodeId: number) => {
+    // Just open the modal, don't analyze yet
+    setSelectedNodeId(nodeId);
+    setGranularQuestion("");
+    setGranularInsight(null);
+    setShowGranularModal(true);
+  };
+
+  const handleGranularAnalyze = async () => {
+    if (!selectedNodeId || !treeData || !aiModel) return;
+
     setGranularLoading(true);
     setGranularInsight(null);
-    setSelectedNodeId(nodeId);
-    setShowGranularModal(true);
 
     try {
-      if (!treeData || !aiModel) return;
       const phenotype = treeData.phenotypes?.find(
-        (p) => p.population === nodeId,
+        (p) => p.population === selectedNodeId,
       );
       if (!phenotype) {
         setGranularInsight({ error: "Phenotype not found" });
@@ -223,7 +233,8 @@ function App() {
         JSON.stringify(payload),
         aiModel,
         "granular",
-        nodeId,
+        selectedNodeId,
+        granularQuestion || undefined,
       );
       setGranularInsight(result);
     } catch (error) {
@@ -523,7 +534,7 @@ function App() {
       progressTimerRef.current = window.setInterval(() => {
         setProgress((current) => (current < 95 ? current + 1 : current));
       }, 1200);
-      const response = await fetch(`${apiUrl}/analyze-batch`, {
+      const response = await fetch(`${apiUrl}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -746,7 +757,7 @@ function App() {
             aria-labelledby="session-notes-heading"
           >
             <h3 id="session-notes-heading">Session Notes</h3>
-            {/*<p className="muted"> </p>*/}
+            <p className="muted"> It takes 60s to wake up the free Render cloud host.</p>
             <div className="stat-row">
               <div>
                 <span>Threshold</span>
@@ -1174,8 +1185,64 @@ function App() {
                 </span>
               )}
             </div>
+
+            {/* Question Input Section */}
+            {!granularLoading && !granularInsight && (
+              <div style={{ marginBottom: "20px" }}>
+                <label
+                  htmlFor="granular-question"
+                  style={{
+                    display: "block",
+                    marginBottom: "8px",
+                    fontWeight: 600,
+                  }}
+                >
+                  Ask a question about this population (optional)
+                </label>
+                <textarea
+                  id="granular-question"
+                  value={granularQuestion}
+                  onChange={(e) => setGranularQuestion(e.target.value)}
+                  placeholder="e.g., What markers define this population? Is it clinically relevant in CLL?"
+                  style={{
+                    width: "100%",
+                    minHeight: "80px",
+                    padding: "12px",
+                    border: "1px solid var(--stroke)",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    fontFamily: "inherit",
+                    color: "var(--ink)",
+                    backgroundColor: "var(--panel)",
+                    resize: "vertical",
+                  }}
+                />
+                <button
+                  onClick={handleGranularAnalyze}
+                  disabled={!aiModel}
+                  style={{
+                    marginTop: "12px",
+                    padding: "10px 20px",
+                    backgroundColor: "var(--accent)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "6px",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    cursor: aiModel ? "pointer" : "not-allowed",
+                    opacity: aiModel ? 1 : 0.5,
+                  }}
+                >
+                  Analyze
+                </button>
+              </div>
+            )}
+
             {granularLoading && (
-              <p style={{ color: "var(--muted)" }}>Analyzing phenotype...</p>
+              <p style={{ color: "var(--muted)" }}>
+                <span className="ai-pulse" style={{ display: "inline-block", marginRight: "8px" }} />
+                Analyzing phenotype...
+              </p>
             )}
             {granularInsight && !granularLoading && (
               <div>

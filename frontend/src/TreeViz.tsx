@@ -1,275 +1,212 @@
-import { useEffect, useRef } from 'react'
-import * as d3 from 'd3'
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as d3 from "d3";
 
-interface Node {
-  id: number
-  name: string
-  marker: string
-  cells?: number
-}
+type TreeNode = {
+  id: number;
+  name: string;
+  marker: string;
+  cells?: number;
+  threshold?: number;
+};
 
-interface Link {
-  source: number
-  target: number
-}
+type TreeLink = {
+  source: number;
+  target: number;
+};
 
-interface TreeData {
-  nodes: Node[]
-  links: Link[]
-}
+type TreeData = {
+  nodes: TreeNode[];
+  links: TreeLink[];
+};
 
-interface TreeVizProps {
-  data: TreeData
-  onLeafNodeClick?: (nodeId: number) => void
-}
+type Props = {
+  data: TreeData;
+  onLeafNodeClick?: (populationId: number) => void;
+};
 
-export default function TreeViz({ data, onLeafNodeClick }: TreeVizProps) {
-  const svgRef = useRef<SVGSVGElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
+type HierarchyNode = TreeNode & { children?: HierarchyNode[] };
+
+const formatThreshold = (value: TreeNode["threshold"]) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return ` ≤ ${value}`;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return ` ≤ ${parsed}`;
+  }
+  return "";
+};
+
+const resolveMarkerLabel = (node: TreeNode) => {
+  if (typeof node.marker === "string" && node.marker.trim()) {
+    return node.marker;
+  }
+  if (typeof node.name === "string" && node.name.trim()) {
+    return node.name;
+  }
+  return "Node";
+};
+
+const parsePopulationId = (node: TreeNode): number | null => {
+  const match = node.name.match(/^Pop_(\d+)$/);
+  if (match) return Number(match[1]);
+  return null;
+};
+
+const buildHierarchy = (data: TreeData): HierarchyNode | null => {
+  if (!data.nodes.length) return null;
+  const nodeMap = new Map<number, HierarchyNode>();
+  const incoming = new Map<number, number>();
+
+  for (const node of data.nodes) {
+    nodeMap.set(node.id, { ...node });
+    incoming.set(node.id, 0);
+  }
+
+  for (const link of data.links) {
+    const parent = nodeMap.get(link.source);
+    const child = nodeMap.get(link.target);
+    if (!parent || !child) continue;
+    if (!parent.children) parent.children = [];
+    parent.children.push(child);
+    incoming.set(child.id, (incoming.get(child.id) || 0) + 1);
+  }
+
+  const rootCandidates = Array.from(nodeMap.values()).filter(
+    (node) => (incoming.get(node.id) || 0) === 0,
+  );
+
+  if (rootCandidates.length === 0) {
+    return nodeMap.values().next().value ?? null;
+  }
+
+  if (rootCandidates.length === 1) return rootCandidates[0];
+
+  return {
+    id: 0,
+    name: "Root",
+    marker: "Root",
+    children: rootCandidates,
+  };
+};
+
+export default function TreeViz({ data, onLeafNodeClick }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [size, setSize] = useState({ width: 800, height: 520 });
 
   useEffect(() => {
-    if (!svgRef.current || !data || !containerRef.current) return
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setSize({
+        width: Math.max(520, Math.floor(entry.contentRect.width)),
+        height: Math.max(420, Math.floor(entry.contentRect.height)),
+      });
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
-    const width = Math.max(1000, containerRef.current.clientWidth - 20)
-    const height = 700
+  const hierarchy = useMemo(() => buildHierarchy(data), [data]);
 
-    // Clear previous
-    d3.select(svgRef.current).selectAll("*").remove()
+  useEffect(() => {
+    if (!svgRef.current || !hierarchy) return;
 
-    const svg = d3.select(svgRef.current)
-      .attr("width", width)
-      .attr("height", height)
-      .attr("aria-label", "Population Tree Visualization")
-      .attr("role", "img");
+    const { width, height } = size;
+    const margin = { top: 24, right: 24, bottom: 24, left: 24 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+    if (innerWidth <= 0 || innerHeight <= 0) return;
 
-    // Add background
-    svg.append("rect")
-      .attr("width", width)
-      .attr("height", height)
-      .attr("fill", "#f9f9f9")
+    const root = d3.hierarchy(hierarchy);
+    const treeLayout = d3.tree<HierarchyNode>().size([innerHeight, innerWidth]);
+    treeLayout(root);
 
-    // Create a group for zooming
-    const g = svg.append("g")
+    const svg = d3
+      .select(svgRef.current)
+      .attr("preserveAspectRatio", "xMinYMin meet")
+      .attr("width", "100%")
+      .attr("height", "100%");
 
-    const hasLinks = data.links && data.links.length > 0
+    svg.selectAll("*").remove();
 
-    if (hasLinks) {
-      const nodesById = new Map<number, Node>()
-      data.nodes.forEach((node) => nodesById.set(node.id, node))
+    const canvas = svg
+      .append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`);
 
-      const childrenById = new Map<number, number[]>()
-      const targetIds = new Set<number>()
-      data.links.forEach((link) => {
-        const sourceId = typeof link.source === "number" ? link.source : (link.source as any).id
-        const targetId = typeof link.target === "number" ? link.target : (link.target as any).id
-        if (!childrenById.has(sourceId)) {
-          childrenById.set(sourceId, [])
-        }
-        childrenById.get(sourceId)?.push(targetId)
-        targetIds.add(targetId)
-      })
+    const linkGenerator = d3
+      .linkHorizontal<d3.HierarchyPointLink<HierarchyNode>, d3.HierarchyPointNode<HierarchyNode>>()
+      .x((d) => d.y)
+      .y((d) => d.x);
 
-      const rootId = data.nodes.find((node) => !targetIds.has(node.id))?.id ?? data.nodes[0]?.id
-      const buildHierarchy = (id: number): any => ({
-        ...nodesById.get(id),
-        children: (childrenById.get(id) || []).map(buildHierarchy)
-      })
+    canvas
+      .append("g")
+      .attr("class", "tree-links")
+      .selectAll("path")
+      .data(root.links())
+      .join("path")
+      .attr("d", linkGenerator)
+      .attr("fill", "none")
+      .attr("stroke", "rgba(29, 27, 26, 0.25)")
+      .attr("stroke-width", 1.6);
 
-      const root = d3.hierarchy(buildHierarchy(rootId))
-      const margin = { top: 40, right: 40, bottom: 40, left: 40 }
-      const treeLayout = d3.tree<any>().size([width - margin.left - margin.right, height - margin.top - margin.bottom])
-      treeLayout(root)
+    const nodes = canvas
+      .append("g")
+      .attr("class", "tree-nodes")
+      .selectAll("g")
+      .data(root.descendants())
+      .join("g")
+      .attr("transform", (d) => `translate(${d.y},${d.x})`);
 
-      const linkPath = d3.linkVertical()
-        .x((d: any) => d.x + margin.left)
-        .y((d: any) => d.y + margin.top)
+    nodes
+      .append("circle")
+      .attr("r", (d) => (d.children ? 7 : 6))
+      .attr("fill", (d) => (d.children ? "#ff8a00" : "#06d6a0"))
+      .attr("stroke", "rgba(29, 27, 26, 0.4)")
+      .attr("stroke-width", 1.2)
+      .style("cursor", (d) => (d.children ? "default" : "pointer"))
+      .on("click", (_event, d) => {
+        if (d.children) return;
+        if (!onLeafNodeClick) return;
+        const populationId = parsePopulationId(d.data);
+        if (populationId !== null) onLeafNodeClick(populationId);
+      });
 
-      g.append("g")
-        .selectAll("path")
-        .data(root.links())
-        .join("path")
-        .attr("d", linkPath as any)
-        .attr("fill", "none")
-        .attr("stroke", "#c9c9c9")
-        .attr("stroke-width", 1.4)
-        .attr("aria-label", (d: any) => `Connection from node ${d.source.data.id} to node ${d.target.data.id}`)
+    nodes
+      .append("text")
+      .attr("class", "tree-label")
+      .attr("x", (d) => (d.children ? -10 : 10))
+      .attr("text-anchor", (d) => (d.children ? "end" : "start"))
+      .attr("dy", "0.35em")
+      .text((d) => {
+        if (!d.children) return d.data.name;
+        const threshold = formatThreshold(d.data.threshold);
+        return `${resolveMarkerLabel(d.data)}${threshold}`;
+      });
 
-      const node = g.append("g")
-        .selectAll("circle")
-        .data(root.descendants())
-        .join("circle")
-        .attr("cx", (d: any) => d.x + margin.left)
-        .attr("cy", (d: any) => d.y + margin.top)
-        .attr("r", (d: any) => {
-          const cellCount = d.data.cells || 100
-          return Math.sqrt(cellCount / Math.PI) / 3 + 5
-        })
-        .attr("fill", "#69b3a2")
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 2)
-        .attr("aria-label", (d: any) => `Population: ${d.data.name}, Cells: ${d.data.cells || 0}`)
-        .attr("role", "img")
-        .on("click", (event, d: any) => {
-          // Only trigger for leaf nodes (have cells property)
-          if (d.data.cells && onLeafNodeClick) {
-            onLeafNodeClick(d.data.id)
-          }
-        })
-        .on("mouseover", function(event, d: any) {
-          if (d.data.cells || d.data.id) {
-            d3.select(this).attr("stroke-width", 3)
-          }
-        })
-        .on("mouseout", function() {
-          d3.select(this).attr("stroke-width", 2)
-        })
-        .style("cursor", (d: any) => d.data.cells ? "pointer" : "default")
-
-      g.append("g")
-        .selectAll("text")
-        .data(root.descendants())
-        .join("text")
-        .text((d: any) => d.data.marker || d.data.name)
-        .attr("x", (d: any) => d.x + margin.left)
-        .attr("y", (d: any) => d.y + margin.top)
-        .attr("font-size", 11)
-        .attr("text-anchor", "start")
-        .attr("dx", (d: any) => {
-          const cellCount = d.data.cells || 100
-          return Math.sqrt(cellCount / Math.PI) / 3 + 10
-        })
-        .attr("dy", 4)
-        .attr("fill", "#333")
-        .attr("aria-hidden", "true")
-
-      const zoom = d3.zoom<SVGSVGElement, unknown>()
-        .on("zoom", (event) => {
-          g.attr("transform", event.transform)
-        })
-
-      svg.call(zoom)
-      return
+    const canvasNode = canvas.node();
+    if (canvasNode) {
+      const bbox = canvasNode.getBBox();
+      const pad = 24;
+      const viewX = bbox.x + margin.left - pad;
+      const viewY = bbox.y + margin.top - pad;
+      const viewWidth = bbox.width + pad * 2;
+      const viewHeight = bbox.height + pad * 2;
+      svg.attr("viewBox", `${viewX} ${viewY} ${viewWidth} ${viewHeight}`);
+    } else {
+      svg.attr("viewBox", `0 0 ${width} ${height}`);
     }
-
-    // Fall back to a force layout when no links are available
-    const simulation = d3.forceSimulation(data.nodes as any)
-      .force("link", d3.forceLink(data.links).id((d: any) => d.id).distance(60))
-      .force("charge", d3.forceManyBody().strength(-200))
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collide", d3.forceCollide((d: any) => {
-        // Node size based on cell count, or 12 if no data
-        const cellCount = (d as any).cells || 100
-        return Math.sqrt(cellCount / Math.PI) / 3 + 15
-      }).iterations(2))
-
-    // Draw links
-    const link = g.append("g")
-      .selectAll("line")
-      .data(data.links)
-      .join("line")
-      .attr("stroke", "#ddd")
-      .attr("stroke-width", 1.5)
-      .attr("aria-label", (d: any) => `Connection from node ${d.source.id} to node ${d.target.id}`);
-
-    // Draw nodes
-    const node = g.append("g")
-      .selectAll("circle")
-      .data(data.nodes)
-      .join("circle")
-      .attr("r", (d: any) => {
-        // Size nodes based on cell count
-        const cellCount = (d as any).cells || 100
-        return Math.sqrt(cellCount / Math.PI) / 3 + 5
-      })
-      .attr("fill", "#69b3a2")
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 2)
-      .attr("aria-label", (d: any) => `Population: ${d.name}, Cells: ${d.cells || 0}`)
-      .attr("role", "img")
-      .on("click", (event, d: any) => {
-        // Only trigger for leaf nodes (have cells property)
-        if (d.cells && onLeafNodeClick) {
-          onLeafNodeClick(d.id)
-        }
-      })
-      .on("mouseover", function(event, d: any) {
-        if (d.cells || d.id) {
-          d3.select(this).attr("stroke-width", 3)
-        }
-      })
-      .on("mouseout", function() {
-        d3.select(this).attr("stroke-width", 2)
-      })
-      .style("cursor", (d: any) => d.cells ? "pointer" : "default");
-
-    // Add labels
-    const label = g.append("g")
-      .selectAll("text")
-      .data(data.nodes)
-      .join("text")
-      .text((d) => d.name)
-      .attr("font-size", 11)
-      .attr("text-anchor", "start")
-      .attr("dx", (d: any) => {
-        const cellCount = (d as any).cells || 100
-        return Math.sqrt(cellCount / Math.PI) / 3 + 10
-      })
-      .attr("dy", 4)
-      .attr("fill", "#333")
-      .attr("aria-hidden", "true"); // Hide labels from screen readers since they're redundant
-
-    // Update positions on tick
-    simulation.on("tick", () => {
-      link
-        .attr("x1", (d: any) => Math.max(0, Math.min(width, d.source.x)))
-        .attr("y1", (d: any) => Math.max(0, Math.min(height, d.source.y)))
-        .attr("x2", (d: any) => Math.max(0, Math.min(width, d.target.x)))
-        .attr("y2", (d: any) => Math.max(0, Math.min(height, d.target.y)))
-
-      node
-        .attr("cx", (d: any) => {
-          d.x = Math.max(10, Math.min(width - 10, d.x))
-          return d.x
-        })
-        .attr("cy", (d: any) => {
-          d.y = Math.max(10, Math.min(height - 10, d.y))
-          return d.y
-        })
-
-      label
-        .attr("x", (d: any) => d.x)
-        .attr("y", (d: any) => d.y)
-    })
-
-    // Add zoom behavior
-    const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .on("zoom", (event) => {
-        g.attr("transform", event.transform)
-      })
-
-    svg.call(zoom)
-
-    // Return cleanup
-    return () => {
-      simulation.stop()
-    }
-  }, [data])
+  }, [hierarchy, onLeafNodeClick, size]);
 
   return (
-    <div ref={containerRef} style={{ width: '100%', overflow: 'hidden' }}>
-      <div style={{ marginBottom: '10px' }}>
-        <small style={{ color: '#666' }}>Scroll to zoom, drag to pan. Node size = cell count</small>
-      </div>
-      <svg
-        ref={svgRef}
-        style={{
-          border: '1px solid #ddd',
-          borderRadius: '5px',
-          display: 'block'
-        }}
-        aria-label="Population Tree Visualization showing relationships between cell populations"
-        role="img"
-      />
+    <div ref={containerRef} className="tree-viz">
+      {hierarchy ? (
+        <svg ref={svgRef} role="img" aria-label="CytomeTree gating tree" />
+      ) : (
+        <div className="tree-viz-empty">No gating tree data yet.</div>
+      )}
     </div>
-  )
+  );
 }

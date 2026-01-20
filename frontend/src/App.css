@@ -754,6 +754,29 @@ input[type="radio"]:focus {
   margin-bottom: 16px;
 }
 
+.tree-viz {
+  width: 100%;
+  height: min(70vh, 560px);
+  border-radius: 16px;
+  border: 1px dashed rgba(29, 27, 26, 0.15);
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.9));
+  overflow: hidden;
+}
+
+.tree-viz .tree-label {
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 11px;
+  fill: var(--ink);
+}
+
+.tree-viz-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 @media (max-width: 980px) {
   .app {
     padding: 24px;
