@@ -1,6 +1,4 @@
-# CytomeTreeD3
-
-# [DEMO HERE](https://adamfehse.github.io/cytomeTreeD3/)
+# CytomeTreeD3 [DEMO HERE](https://adamfehse.github.io/cytomeTreeD3/)
 
 ## Test Data                                      
                                                     
